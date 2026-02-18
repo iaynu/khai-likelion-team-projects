@@ -1,0 +1,189 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "MarketSalesReviewList",
+  "description": "market_sales_review payload: array of market/sales/review records",
+  "type": "array",
+  "minItems": 1,
+  "items": {
+    "type": "object",
+    "required": [
+      "id",
+      "market_analysis",
+      "raw_data_context",
+      "metadata",
+      "analysis_reports"
+    ],
+    "properties": {
+      "id": {
+        "type": "string"
+      },
+      "market_analysis": {
+        "type": "object",
+        "required": [
+          "phase",
+          "trend_review"
+        ],
+        "properties": {
+          "phase": {
+            "type": "string"
+          },
+          "trend_review": {
+            "type": "string"
+          },
+          "competition_intensity": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "revenue_analysis": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "customer_analysis": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "review_metrics": {},
+      "raw_data_context": {
+        "type": "object",
+        "required": [
+          "metrics"
+        ],
+        "properties": {
+          "trend_history": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "metrics": {
+            "type": "object",
+            "required": [
+              "store_count"
+            ],
+            "properties": {
+              "store_count": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "net_change": {
+                "type": "integer"
+              },
+              "close_rate": {
+                "type": "number"
+              },
+              "has_sales_data": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      },
+      "metadata": {
+        "type": "object",
+        "required": [
+          "area",
+          "sector",
+          "quarter"
+        ],
+        "properties": {
+          "area": {
+            "type": "string"
+          },
+          "section": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sector": {
+            "type": "string"
+          },
+          "quarter": {
+            "type": "string"
+          }
+        }
+      },
+      "analysis_reports": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": [
+            "store_id",
+            "store_name"
+          ],
+          "properties": {
+            "store_id": {
+              "type": "string"
+            },
+            "store_name": {
+              "type": "string"
+            },
+            "analysis_date": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "review_metrics": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "properties": {
+                "overall_sentiment": {
+                  "type": "object",
+                  "properties": {
+                    "score": {
+                      "type": "number"
+                    },
+                    "label": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "feature_scores": {
+                  "type": "object"
+                }
+              }
+            },
+            "top_keywords": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "type": "string"
+              }
+            },
+            "critical_feedback": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "type": "string"
+              }
+            },
+            "rag_context": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        }
+      },
+      "report_count": {
+        "type": "integer"
+      }
+    }
+  }
+}
