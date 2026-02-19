@@ -5,6 +5,14 @@ class Settings(BaseSettings):
     # Database
     DATABASE_URL: str = "sqlite+aiosqlite:///./backbone.db"  # 기본값을 SQLite로 변경
 
+    # Redis & Celery
+    REDIS_URL: str = "redis://localhost:6379/0"
+    CELERY_BROKER_URL: str = "redis://localhost:6379/0"
+    CELERY_RESULT_BACKEND: str = "redis://localhost:6379/1"
+
+    # API Security
+    WORKER_API_KEY: str = "change-me-in-production"  # Worker가 /save 엔드포인트 호출 시 사용
+
     # App
     APP_TITLE: str = "Backbone Backend"
     APP_VERSION: str = "0.1.0"
