@@ -13,6 +13,9 @@ class Settings(BaseSettings):
     # API Security
     WORKER_API_KEY: str = "change-me-in-production"  # Worker가 /save 엔드포인트 호출 시 사용
 
+    # OpenAI
+    OPENAI_API_KEY: str = ""  # OpenAI API Key for GPT
+
     # App
     APP_TITLE: str = "Backbone Backend"
     APP_VERSION: str = "0.1.0"

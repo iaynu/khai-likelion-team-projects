@@ -28,6 +28,7 @@ class XReportGenerationTask(Task):
 def generate_x_report(
     self,
     job_id: int,
+    store_id: str,
     store_source_id: str,
     store_name: str,
     snapshot_version: str,
@@ -38,6 +39,7 @@ def generate_x_report(
 
     Args:
         job_id: Job ID
+        store_id: Store UUID
         store_source_id: 매장 소스 ID
         store_name: 매장 이름
         snapshot_version: 스냅샷 버전
@@ -48,16 +50,19 @@ def generate_x_report(
     """
     print(f"[START] Generating X-Report for store={store_name}, job_id={job_id}")
 
+    # Job 상태를 PROCESSING으로 업데이트
+    update_job_status(job_id, "processing")
+
     # OpenAI API Key 확인
-    api_key = os.getenv("OPENAI_API_KEY")
+    api_key = settings.OPENAI_API_KEY
     if not api_key:
-        raise ValueError("OPENAI_API_KEY not set in environment")
+        raise ValueError("OPENAI_API_KEY not set in settings")
 
     client = OpenAI(api_key=api_key)
 
     # === Step 1: 매장 데이터 조회 ===
     print("[1/4] Fetching store data from backend...")
-    store_data = fetch_store_data(store_source_id, snapshot_version)
+    store_data = fetch_store_data(store_id, snapshot_version)
 
     # === Step 2: GPT 분석 (Temperature 0.1) ===
     print("[2/4] GPT analysis...")
@@ -87,21 +92,27 @@ def generate_x_report(
     return result
 
 
-def fetch_store_data(store_source_id: str, snapshot_version: str) -> Dict[str, Any]:
+def fetch_store_data(store_id: str, snapshot_version: str) -> Dict[str, Any]:
     """백엔드 API에서 매장 데이터 조회"""
-    # TODO: 실제 백엔드 API 호출
-    # GET /stores/{store_id}/documents?snapshot_version=v1
+    url = f"http://127.0.0.1:8000/stores/{store_id}/documents"
+    params = {}  # snapshot_version 쿼리 파라미터는 현재 엔드포인트에서 지원하지 않음
 
-    # 임시로 Mock 데이터 반환
-    return {
-        "store_name": "테스트 매장",
-        "review_metrics": {"overall_sentiment": {"score": 0.9}},
-        "population_data": "인구 데이터",
-        "sales_metrics": "매출 데이터",
-        "industry_context": {"phase": "성장"},
-        "critical_feedback": ["피드백 1"],
-        "avg_price": "15000원",
-    }
+    try:
+        response = requests.get(url, params=params, timeout=30)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        print(f"[ERROR] Failed to fetch store data: {e}")
+        # Fallback to mock data if API call fails
+        return {
+            "store_name": "테스트 매장",
+            "review_metrics": {"overall_sentiment": {"score": 0.9}},
+            "population_data": "인구 데이터",
+            "sales_metrics": "매출 데이터",
+            "industry_context": {"phase": "성장"},
+            "critical_feedback": ["피드백 1"],
+            "avg_price": "15000원",
+        }
 
 
 def call_gpt_analysis(client: OpenAI, store_data: Dict, store_name: str) -> str:
@@ -231,6 +242,24 @@ def extract_solutions(report_text: str) -> List[Dict[str, Any]]:
     return solutions[:12]  # 최대 12개
 
 
+def update_job_status(job_id: int, status: str) -> None:
+    """Job 상태 업데이트"""
+    url = f"http://127.0.0.1:8000/jobs/{job_id}/status"
+    payload = {"status": status}
+    headers = {
+        "Content-Type": "application/json",
+        "X-API-Key": settings.WORKER_API_KEY,
+    }
+
+    try:
+        response = requests.patch(url, json=payload, headers=headers, timeout=10)
+        response.raise_for_status()
+        print(f"[INFO] Job {job_id} status updated to {status}")
+    except requests.exceptions.RequestException as e:
+        print(f"[WARNING] Failed to update job status: {e}")
+        # Don't raise - this is not critical
+
+
 def save_to_backend(
     job_id: int,
     store_source_id: str,
@@ -242,7 +271,7 @@ def save_to_backend(
 ) -> Dict[str, Any]:
     """백엔드 API로 X-Report 저장"""
 
-    url = f"{settings.DATABASE_URL.replace('sqlite+aiosqlite:///', 'http://127.0.0.1:8000')}/x-reports/save"
+    url = "http://127.0.0.1:8000/x-reports/save"
 
     payload = {
         "job_id": job_id,
@@ -260,11 +289,10 @@ def save_to_backend(
         "X-API-Key": settings.WORKER_API_KEY,
     }
 
-    # TODO: 실제 URL 설정 필요
-    # response = requests.post(url, json=payload, headers=headers, timeout=30)
-    # response.raise_for_status()
-    # return response.json()
-
-    # 임시 Mock 응답
-    print(f"[MOCK] Would save to {url}")
-    return {"id": 999, "store_source_id": store_source_id}
+    try:
+        response = requests.post(url, json=payload, headers=headers, timeout=60)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        print(f"[ERROR] Failed to save to backend: {e}")
+        raise

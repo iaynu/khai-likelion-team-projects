@@ -3,16 +3,29 @@ Jobs API - 비동기 작업 관리
 """
 import logging
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Header
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
 from app.schemas.job import JobCreateRequest, JobOut, JobListOut
 from app.repositories.job_repo import JobRepo
 from app.models.job import JobStatus
+from tasks.x_report_task import generate_x_report
+from app.core.config import settings
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/jobs", tags=["jobs"])
+
+
+class JobStatusUpdate(BaseModel):
+    status: str
+
+
+def verify_worker_api_key(x_api_key: str = Header(...)) -> None:
+    """Worker API Key 검증"""
+    if x_api_key != settings.WORKER_API_KEY:
+        raise HTTPException(status_code=403, detail="Invalid API Key")
 
 
 @router.post("", response_model=JobOut, status_code=201)
@@ -24,16 +37,23 @@ async def create_job(body: JobCreateRequest, db: AsyncSession = Depends(get_db))
     작업은 즉시 Job Queue에 등록되고 Worker가 처리합니다.
     응답으로 받은 job_id로 작업 상태를 확인할 수 있습니다.
     """
+    from app.repositories.store_repo import StoreRepo
+
     repo = JobRepo(db)
+    store_repo = StoreRepo(db)
 
-    # TODO: Celery task 등록 (Phase 2에서 구현)
-    # celery_task = tasks.generate_x_report.delay(...)
-    # celery_task_id = celery_task.id
+    # Store 조회 (이름 가져오기)
+    store = await store_repo.get_by_source_id(body.store_source_id)
+    if not store:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "STORE_NOT_FOUND", "message": f"store_source_id={body.store_source_id}"}
+        )
 
-    # 임시로 celery_task_id 없이 Job 생성
+    # Job 생성 (celery_task_id는 아직 없음)
     job = await repo.create(
         job_type=body.job_type,
-        celery_task_id=None,  # Phase 2에서 실제 task_id 설정
+        celery_task_id=None,  # 먼저 None으로 생성
         store_source_id=body.store_source_id,
         snapshot_version=body.snapshot_version,
         prompt_id=body.prompt_id,
@@ -42,7 +62,23 @@ async def create_job(body: JobCreateRequest, db: AsyncSession = Depends(get_db))
     await db.commit()
     await db.refresh(job)
 
-    logger.info(f"Job created: id={job.id}, type={body.job_type}")
+    # Celery Task 등록
+    if body.job_type == "x_report":
+        celery_task = generate_x_report.delay(
+            job_id=job.id,
+            store_id=store.id,
+            store_source_id=body.store_source_id,
+            store_name=store.store_name,
+            snapshot_version=body.snapshot_version,
+            prompt_id=body.prompt_id,
+        )
+
+        # Job에 celery_task_id 업데이트
+        job.celery_task_id = celery_task.id
+        await db.commit()
+        await db.refresh(job)
+
+    logger.info(f"Job created: id={job.id}, type={body.job_type}, celery_task_id={job.celery_task_id}")
     return JobOut.model_validate(job, from_attributes=True)
 
 
@@ -65,6 +101,44 @@ async def get_job(job_id: int, db: AsyncSession = Depends(get_db)):
             detail={"code": "JOB_NOT_FOUND", "message": f"job_id={job_id}"}
         )
 
+    return JobOut.model_validate(job, from_attributes=True)
+
+
+@router.patch("/{job_id}/status", response_model=JobOut, dependencies=[Depends(verify_worker_api_key)])
+async def update_job_status(
+    job_id: int,
+    body: JobStatusUpdate,
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    작업 상태 업데이트 (Worker 전용)
+
+    Worker가 작업 처리 중 상태를 업데이트합니다.
+    """
+    repo = JobRepo(db)
+    job = await repo.get_by_id(job_id)
+
+    if job is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "JOB_NOT_FOUND", "message": f"job_id={job_id}"}
+        )
+
+    # JobStatus enum으로 변환
+    try:
+        new_status = JobStatus(body.status)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "INVALID_STATUS", "message": f"Invalid status: {body.status}"}
+        )
+
+    # 상태 업데이트
+    job = await repo.update_status(job_id, new_status)
+    await db.commit()
+    await db.refresh(job)
+
+    logger.info(f"Job {job_id} status updated to {new_status}")
     return JobOut.model_validate(job, from_attributes=True)
 
 
