@@ -13,7 +13,7 @@ FastAPI + PostgreSQL + Celery 기반 상권 분석 백엔드. 비동기 Job Queu
 | Migration | Alembic |
 | DB | PostgreSQL 15+ / SQLite (개발/테스트) |
 | Job Queue | Celery, Redis |
-| LLM | OpenAI GPT-4 |
+| LLM | OpenAI gpt-5.2 |
 | 컨테이너 | Docker, docker-compose |
 | 테스트 | pytest, pytest-asyncio, httpx, aiosqlite |
 
@@ -38,7 +38,7 @@ FastAPI + PostgreSQL + Celery 기반 상권 분석 백엔드. 비동기 Job Queu
         ↓
 ┌─────────────────┐
 │  OpenAI API     │
-│  (GPT-4)        │
+│  (gpt-5.2)      │
 └─────────────────┘
         ↓
 ┌─────────────────┐
@@ -258,7 +258,7 @@ in-memory SQLite를 사용하여 DB 없이 실행됩니다.
 | **비동기 Job Queue** | Celery + Redis로 장시간 실행 작업(GPT 호출) 비동기 처리 |
 | **Worker API Key** | Worker가 `/x-reports/save` 호출 시 `X-API-Key` 헤더로 인증 |
 | **Job 상태 관리** | pending → processing → completed/failed |
-| **GPT-4 통합** | 2단계 호출: (1) 분석(temp=0.1) → (2) 전략 생성(temp=0.7) |
+| **gpt-5.2 통합** | 2단계 호출: (1) 분석(temp=0.1) → (2) 전략 생성(temp=0.7) |
 | **store_source_id** | 원천 JSON의 `store_id` — business key로 upsert |
 | **merged_input** | `fn_get_merged_input()` Postgres function으로 동적 생성 |
 | **전략 9개** | 3개 솔루션 그룹 × 3개 액션 = 9개, 단일 트랜잭션 저장 |
