@@ -72,7 +72,7 @@ def generate_x_report(
     print("[3/4] GPT X-Report generation...")
     report_text = call_gpt_report(client, store_data, store_name, analysis_result)
 
-    # === Step 4: 12개 전략 추출 ===
+    # === Step 4: 9개 전략 추출 ===
     print("[4/4] Extracting strategies...")
     strategies = extract_solutions(report_text)
 
@@ -157,9 +157,9 @@ def call_gpt_report(client: OpenAI, store_data: Dict, store_name: str, analysis_
 - 매장명: {store_name}
 - 상권 및 매출/리뷰 데이터: {analysis_result}
 
-각 전략 카테고리당 최소 2개에서 최대 4개까지 솔루션을 제시하세요. (전체 솔루션 합계는 6~12개가 되어야 함)
+각 전략 카테고리당 3개씩 솔루션을 제시하세요. (전체 솔루션 합계는 9개가 되어야 함)
 
-3개의 전략 카테고리를 선정하고, 각 카테고리별로 구체적인 솔루션을 제시하세요."""
+3개의 전략 카테고리를 선정하고, 각 카테고리별로 3개의 구체적인 솔루션을 제시하세요."""
 
     response = client.chat.completions.create(
         model="gpt-5.2",
@@ -174,7 +174,7 @@ def call_gpt_report(client: OpenAI, store_data: Dict, store_name: str, analysis_
 
 
 def extract_solutions(report_text: str) -> List[Dict[str, Any]]:
-    """Report에서 12개 전략 추출"""
+    """Report에서 9개 전략 추출 (3개 카테고리 × 3개 솔루션)"""
     import re
 
     solutions = []
@@ -235,11 +235,11 @@ def extract_solutions(report_text: str) -> List[Dict[str, Any]]:
                 "impact_mapping": {"impact": 0.15}
             })
 
-    # 12개가 안 되면 경고
-    if len(solutions) < 6:
-        print(f"[WARNING] Only {len(solutions)} solutions extracted (expected 6-12)")
+    # 9개가 안 되면 경고
+    if len(solutions) < 9:
+        print(f"[WARNING] Only {len(solutions)} solutions extracted (expected 9)")
 
-    return solutions[:12]  # 최대 12개
+    return solutions[:9]  # 최대 9개
 
 
 def update_job_status(job_id: int, status: str) -> None:

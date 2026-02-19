@@ -213,7 +213,7 @@ curl http://127.0.0.1:8000/jobs/1
 curl http://127.0.0.1:8000/x-reports/5
 ```
 
-#### 2-4. 12개 Strategy 조회
+#### 2-4. 9개 Strategy 조회
 
 ```bash
 curl http://127.0.0.1:8000/x-reports/5/strategies
@@ -261,7 +261,7 @@ in-memory SQLite를 사용하여 DB 없이 실행됩니다.
 | **GPT-4 통합** | 2단계 호출: (1) 분석(temp=0.1) → (2) 전략 생성(temp=0.7) |
 | **store_source_id** | 원천 JSON의 `store_id` — business key로 upsert |
 | **merged_input** | `fn_get_merged_input()` Postgres function으로 동적 생성 |
-| **전략 12개** | 3개 솔루션 그룹 × 4개 액션 = 12개, 단일 트랜잭션 저장 |
+| **전략 9개** | 3개 솔루션 그룹 × 3개 액션 = 9개, 단일 트랜잭션 저장 |
 | **확장성** | GPU 머신에 Worker 추가 배포로 병렬 처리 확장 가능 |
 
 ---

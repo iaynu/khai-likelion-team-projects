@@ -157,7 +157,7 @@ curl http://127.0.0.1:8000/jobs/1
 curl http://127.0.0.1:8000/x-reports/5
 ```
 
-### 4. 12개 Strategy 조회
+### 4. 9개 Strategy 조회
 
 ```bash
 curl http://127.0.0.1:8000/x-reports/5/strategies
