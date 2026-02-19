@@ -134,7 +134,7 @@ def call_gpt_analysis(client: OpenAI, store_data: Dict, store_name: str) -> str:
 반드시 '### 최종 분석 보고' 헤더 다음 상세 내용을 작성하세요."""
 
     response = client.chat.completions.create(
-        model="gpt-4",  # 실제 모델로 변경
+        model="gpt-5.2",
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
@@ -162,7 +162,7 @@ def call_gpt_report(client: OpenAI, store_data: Dict, store_name: str, analysis_
 3개의 전략 카테고리를 선정하고, 각 카테고리별로 구체적인 솔루션을 제시하세요."""
 
     response = client.chat.completions.create(
-        model="gpt-4",
+        model="gpt-5.2",
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
@@ -280,7 +280,7 @@ def save_to_backend(
         "prompt_id": prompt_id,
         "content_text": content_text,
         "config_json": {"analysis_log": analysis_log},
-        "model_meta": {"model": "gpt-4", "worker": "celery"},
+        "model_meta": {"model": "gpt-5.2", "worker": "celery"},
         "strategies": strategies,
     }
 
