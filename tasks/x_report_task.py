@@ -195,12 +195,22 @@ def extract_solutions(report_text: str) -> List[Dict[str, Any]]:
         "인테리어": "insta"
     }
 
-    # 카테고리별 파싱
-    categories = re.split(r"### 🔹 전략 카테고리 \d+[:.]\s*\*{0,2}\[?(.*?)\]?\*{0,2}\s*(?:\(.*?\))?\s*\n", report_text)
+    # 카테고리별 파싱 (수정: 실제 GPT 출력 형식에 맞춤)
+    # 패턴: "전략 카테고리 1: 제목" 형식 (**, 공백 허용)
+    categories = re.split(
+        r"(?:^|\n)\s*\*{0,2}전략 카테고리 (\d+)[:.]\s*(.+?)(?:\*{0,2})\s*(?:\n|$)",
+        report_text,
+        flags=re.MULTILINE
+    )
 
-    for i in range(1, len(categories), 2):
-        theme = categories[i].strip().strip('*').strip('[').strip(']').strip()
-        content = categories[i+1] if i+1 < len(categories) else ""
+    # categories 구조: [전문, 번호1, 제목1, 내용1, 번호2, 제목2, 내용2, ...]
+    for i in range(1, len(categories), 3):
+        if i + 2 >= len(categories):
+            break
+
+        category_num = categories[i].strip()
+        theme = categories[i+1].strip().strip('*').strip()
+        content = categories[i+2] if i+2 < len(categories) else ""
 
         # 기본 메트릭
         base_metric = "overall"
@@ -209,10 +219,20 @@ def extract_solutions(report_text: str) -> List[Dict[str, Any]]:
                 base_metric = target
                 break
 
-        # 개별 솔루션 추출
-        sols = re.findall(r"-\s*\*{0,2}솔루션 [A-Z][:.]\*{0,2}\s*(.*?)(?=\n-\s*\*{0,2}솔루션 [A-Z]|### |## |$)", content, re.DOTALL)
-        for idx, sol_text in enumerate(sols, 1):
-            sol_name = sol_text.strip().split('\n')[0].strip().strip('*')
+        # 개별 솔루션 추출 (수정: 숫자 패턴 사용)
+        # 패턴: "- 솔루션 1:" 또는 "- **솔루션 1:**" 형식
+        sols = re.findall(
+            r"-\s*\*{0,2}솔루션 (\d+)[:.]\*{0,2}\s*(.*?)(?=\n-\s*\*{0,2}솔루션 \d+|전략 카테고리|\*{0,2}전략 카테고리|$)",
+            content,
+            re.DOTALL
+        )
+
+        for sol_num, sol_text in sols:
+            sol_text = sol_text.strip()
+            # 첫 줄을 제목으로 사용
+            lines = sol_text.split('\n')
+            sol_name = lines[0].strip().strip('*').strip(':').strip()
+
             if not sol_name or len(sol_name) < 3:
                 continue
 
@@ -223,12 +243,12 @@ def extract_solutions(report_text: str) -> List[Dict[str, Any]]:
                     sol_metric = target
                     break
 
-            # solution_group 계산 (1, 2, 3)
-            solution_group = (i // 2) + 1
+            # solution_group은 카테고리 번호 사용
+            solution_group = int(category_num)
 
             solutions.append({
                 "solution_group": solution_group,
-                "action_idx": idx,
+                "action_idx": int(sol_num),
                 "title": sol_name[:200],  # 제목 길이 제한
                 "description": sol_text[:500],  # 설명 길이 제한
                 "config": {"metric": sol_metric},
@@ -236,8 +256,9 @@ def extract_solutions(report_text: str) -> List[Dict[str, Any]]:
             })
 
     # 9개가 안 되면 경고
-    if len(solutions) < 9:
-        print(f"[WARNING] Only {len(solutions)} solutions extracted (expected 9)")
+    if len(solutions) != 9:
+        print(f"[WARNING] {len(solutions)} solutions extracted (expected 9)")
+        print(f"[DEBUG] Category split resulted in {len(categories)} parts")
 
     return solutions[:9]  # 최대 9개
 
