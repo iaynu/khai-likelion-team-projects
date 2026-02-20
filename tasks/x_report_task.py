@@ -174,93 +174,267 @@ def call_gpt_report(client: OpenAI, store_data: Dict, store_name: str, analysis_
 
 
 def extract_solutions(report_text: str) -> List[Dict[str, Any]]:
-    """Report에서 9개 전략 추출 (3개 카테고리 × 3개 솔루션)"""
+    """
+    Report에서 정확히 9개 전략 추출 (3개 카테고리 × 3개 솔루션)
+
+    파싱 전략:
+    1. 카테고리 기준 파싱 (우선순위)
+    2. Fallback: 전체 텍스트에서 솔루션 추출
+
+    Args:
+        report_text: GPT 생성 X-Report 텍스트
+
+    Returns:
+        9개 솔루션 리스트
+
+    Raises:
+        ValueError: 9개 솔루션을 추출하지 못한 경우
+    """
+    import re
+
+    # 메트릭 매핑
+    METRIC_MAPPING = {
+        "공간 경험": "insta", "제품 매력": "taste", "전반 평판": "overall",
+        "재방문 록인": "service", "브랜드 인지": "insta", "맛": "taste",
+        "가격": "price_value", "가성비": "price_value", "서비스": "service",
+        "청결": "service", "분위기": "insta", "인테리어": "insta"
+    }
+
+    # 1순위: 카테고리 기준 파싱
+    try:
+        solutions = _extract_by_categories(report_text, METRIC_MAPPING)
+        if len(solutions) == 9:
+            return solutions
+        print(f"[WARNING] Category parsing extracted {len(solutions)} solutions, trying fallback...")
+    except Exception as e:
+        print(f"[WARNING] Category parsing failed: {e}, trying fallback...")
+
+    # 2순위: Fallback - 전체 텍스트에서 솔루션 추출
+    try:
+        solutions = _extract_fallback(report_text, METRIC_MAPPING)
+        if len(solutions) >= 9:
+            return solutions[:9]
+    except Exception as e:
+        print(f"[ERROR] Fallback parsing also failed: {e}")
+
+    # 검증 실패 - 예외 발생
+    raise ValueError(
+        f"Expected 9 solutions, got {len(solutions)}. "
+        f"Report parsing failed. Please check GPT output format."
+    )
+
+
+def _extract_by_categories(report_text: str, metric_mapping: Dict[str, str]) -> List[Dict[str, Any]]:
+    """
+    카테고리 기준 파싱: '전략 카테고리' 헤더로 3개 블록 분리 → 각 블록에서 3개 솔루션 추출
+    """
     import re
 
     solutions = []
 
-    # 메트릭 매핑
-    mapping = {
-        "공간 경험": "insta",
-        "제품 매력": "taste",
-        "전반 평판": "overall",
-        "재방문 록인": "service",
-        "브랜드 인지": "insta",
-        "맛": "taste",
-        "가격": "price_value",
-        "가성비": "price_value",
-        "서비스": "service",
-        "청결": "service",
-        "분위기": "insta",
-        "인테리어": "insta"
-    }
+    # 카테고리 블록 찾기 (유연한 패턴)
+    # "전략 카테고리 1: 제목" 또는 "**전략 카테고리 1: 제목**" 등
+    category_pattern = r"(?:^|\n)\s*(?:#{1,3}\s*)?(?:\*{0,2})전략\s*카테고리\s*(\d+)\s*[:：-]\s*(.+?)(?:\*{0,2})\s*$"
+    matches = list(re.finditer(category_pattern, report_text, re.MULTILINE | re.IGNORECASE))
 
-    # 카테고리별 파싱 (수정: 실제 GPT 출력 형식에 맞춤)
-    # 패턴: "전략 카테고리 1: 제목" 형식 (**, 공백 허용)
-    categories = re.split(
-        r"(?:^|\n)\s*\*{0,2}전략 카테고리 (\d+)[:.]\s*(.+?)(?:\*{0,2})\s*(?:\n|$)",
-        report_text,
-        flags=re.MULTILINE
-    )
+    if len(matches) < 3:
+        raise ValueError(f"Found only {len(matches)} categories (expected 3)")
 
-    # categories 구조: [전문, 번호1, 제목1, 내용1, 번호2, 제목2, 내용2, ...]
-    for i in range(1, len(categories), 3):
-        if i + 2 >= len(categories):
-            break
+    # 각 카테고리 블록 추출
+    for i, match in enumerate(matches[:3]):
+        category_num = int(match.group(1))
+        category_title = match.group(2).strip().strip('*').strip()
 
-        category_num = categories[i].strip()
-        theme = categories[i+1].strip().strip('*').strip()
-        content = categories[i+2] if i+2 < len(categories) else ""
+        # 블록 범위: 현재 카테고리 시작 ~ 다음 카테고리 시작 (또는 문서 끝)
+        block_start = match.end()
+        block_end = matches[i+1].start() if i+1 < len(matches) else len(report_text)
+        block_content = report_text[block_start:block_end]
 
-        # 기본 메트릭
+        # 메트릭 결정
         base_metric = "overall"
-        for keyword, target in mapping.items():
-            if keyword in theme:
+        for keyword, target in metric_mapping.items():
+            if keyword in category_title:
                 base_metric = target
                 break
 
-        # 개별 솔루션 추출 (수정: 숫자 패턴 사용)
-        # 패턴: "- 솔루션 1:" 또는 "- **솔루션 1:**" 형식
-        sols = re.findall(
-            r"-\s*\*{0,2}솔루션 (\d+)[:.]\*{0,2}\s*(.*?)(?=\n-\s*\*{0,2}솔루션 \d+|전략 카테고리|\*{0,2}전략 카테고리|$)",
-            content,
-            re.DOTALL
+        # 블록에서 솔루션 추출
+        block_solutions = _extract_solutions_from_block(
+            block_content,
+            category_num,
+            base_metric,
+            metric_mapping
         )
 
-        for sol_num, sol_text in sols:
-            sol_text = sol_text.strip()
-            # 첫 줄을 제목으로 사용
-            lines = sol_text.split('\n')
-            sol_name = lines[0].strip().strip('*').strip(':').strip()
+        solutions.extend(block_solutions)
 
-            if not sol_name or len(sol_name) < 3:
-                continue
+    return solutions
 
-            # 솔루션별 메트릭 재정의
-            sol_metric = base_metric
-            for keyword, target in mapping.items():
-                if keyword in sol_name:
-                    sol_metric = target
-                    break
 
-            # solution_group은 카테고리 번호 사용
-            solution_group = int(category_num)
+def _extract_solutions_from_block(
+    block_content: str,
+    category_num: int,
+    base_metric: str,
+    metric_mapping: Dict[str, str]
+) -> List[Dict[str, Any]]:
+    """
+    단일 카테고리 블록에서 솔루션 추출 (라인 스캐너 방식)
+    """
+    import re
 
-            solutions.append({
-                "solution_group": solution_group,
-                "action_idx": int(sol_num),
-                "title": sol_name[:200],  # 제목 길이 제한
-                "description": sol_text[:500],  # 설명 길이 제한
-                "config": {"metric": sol_metric},
-                "impact_mapping": {"impact": 0.15}
-            })
+    solutions = []
 
-    # 9개가 안 되면 경고
-    if len(solutions) != 9:
-        print(f"[WARNING] {len(solutions)} solutions extracted (expected 9)")
-        print(f"[DEBUG] Category split resulted in {len(categories)} parts")
+    # 솔루션 시작 패턴 (유연함)
+    # "- 솔루션 1:", "• **솔루션 2:**", "1. Solution 3:" 등
+    solution_start_pattern = r"^[\s\-•\*]*(?:\d+\.|\-|•)\s*(?:\*{0,2})(?:솔루션|Solution)\s*(\d+)\s*[:：]\s*(?:\*{0,2})\s*(.*)$"
 
-    return solutions[:9]  # 최대 9개
+    lines = block_content.split('\n')
+    current_solution = None
+    current_solution_num = None
+
+    for line in lines:
+        line_stripped = line.strip()
+
+        # 솔루션 시작 감지
+        match = re.match(solution_start_pattern, line_stripped, re.IGNORECASE)
+        if match:
+            # 이전 솔루션 저장
+            if current_solution is not None:
+                _save_solution(
+                    solutions,
+                    current_solution_num,
+                    current_solution,
+                    category_num,
+                    base_metric,
+                    metric_mapping
+                )
+
+            # 새 솔루션 시작
+            current_solution_num = int(match.group(1))
+            current_solution = match.group(2).strip()
+        elif current_solution is not None:
+            # 솔루션 설명 계속 (여러 줄 병합)
+            if line_stripped:  # 빈 줄 제외
+                current_solution += " " + line_stripped
+
+    # 마지막 솔루션 저장
+    if current_solution is not None:
+        _save_solution(
+            solutions,
+            current_solution_num,
+            current_solution,
+            category_num,
+            base_metric,
+            metric_mapping
+        )
+
+    return solutions
+
+
+def _extract_fallback(report_text: str, metric_mapping: Dict[str, str]) -> List[Dict[str, Any]]:
+    """
+    Fallback: 전체 텍스트에서 솔루션만 추출 (카테고리 구분 없이)
+    """
+    import re
+
+    solutions = []
+
+    # 솔루션 패턴 (더 유연함)
+    pattern = r"(?:^|\n)[\s\-•\*]*(?:\d+\.|\-|•)\s*(?:\*{0,2})(?:솔루션|Solution)\s*(\d+)\s*[:：]\s*(?:\*{0,2})\s*(.+?)(?=\n[\s\-•\*]*(?:\d+\.|\-|•)\s*(?:\*{0,2})(?:솔루션|Solution)|$)"
+
+    matches = re.findall(pattern, report_text, re.MULTILINE | re.DOTALL | re.IGNORECASE)
+
+    for sol_num, sol_text in matches:
+        sol_text = _normalize_solution_text(sol_text)
+
+        if len(sol_text) < 10:  # 너무 짧은 솔루션 제외
+            continue
+
+        # 첫 문장을 제목으로
+        title = sol_text.split('.')[0].strip()
+        if len(title) > 200:
+            title = title[:200]
+
+        # 메트릭 추론
+        metric = "overall"
+        for keyword, target in metric_mapping.items():
+            if keyword in sol_text:
+                metric = target
+                break
+
+        # solution_group은 순서 기반 (1-3: 그룹1, 4-6: 그룹2, 7-9: 그룹3)
+        solution_group = ((len(solutions)) // 3) + 1
+
+        solutions.append({
+            "solution_group": solution_group,
+            "action_idx": int(sol_num),
+            "title": title,
+            "description": sol_text[:500],
+            "config": {"metric": metric},
+            "impact_mapping": {"impact": 0.15}
+        })
+
+    return solutions
+
+
+def _save_solution(
+    solutions: List[Dict[str, Any]],
+    sol_num: int,
+    sol_text: str,
+    category_num: int,
+    base_metric: str,
+    metric_mapping: Dict[str, str]
+):
+    """솔루션 정규화 후 리스트에 추가"""
+    sol_text = _normalize_solution_text(sol_text)
+
+    if len(sol_text) < 10:  # 너무 짧은 솔루션 제외
+        return
+
+    # 첫 문장을 제목으로
+    title = sol_text.split('.')[0].strip()
+    if len(title) > 200:
+        title = title[:200]
+
+    # 메트릭 재정의
+    metric = base_metric
+    for keyword, target in metric_mapping.items():
+        if keyword in sol_text:
+            metric = target
+            break
+
+    solutions.append({
+        "solution_group": category_num,
+        "action_idx": sol_num,
+        "title": title,
+        "description": sol_text[:500],
+        "config": {"metric": metric},
+        "impact_mapping": {"impact": 0.15}
+    })
+
+
+def _normalize_solution_text(text: str) -> str:
+    """
+    솔루션 텍스트 정규화
+    - 불필요한 prefix 제거
+    - 공백/개행 정리
+    - Bold 마크다운 제거
+    """
+    import re
+
+    # Bold 마크다운 제거
+    text = re.sub(r'\*{2,}', '', text)
+
+    # 불필요한 prefix 제거
+    # "솔루션 1:", "Solution 2:", "1.", "•", "-" 등
+    text = re.sub(r'^(?:솔루션|Solution)\s*\d+\s*[:：]\s*', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'^\d+\.\s*', '', text)
+    text = re.sub(r'^[\-•※]\s*', '', text)
+
+    # 연속된 공백/개행 정리
+    text = re.sub(r'\s+', ' ', text)
+    text = text.strip()
+
+    return text
 
 
 def update_job_status(job_id: int, status: str) -> None:

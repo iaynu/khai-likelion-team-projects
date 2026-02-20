@@ -235,40 +235,39 @@ def test_extract_solutions(report_text: str, sample_name: str, expected_count: i
     extract_solutions 함수 테스트 및 결과 검증
     """
     print(f"\n{'='*80}")
-    print(f"🧪 테스트: {sample_name}")
+    print(f"Test: {sample_name}")
     print(f"{'='*80}\n")
 
     # extract_solutions 실행
     results = extract_solutions(report_text)
 
-    print(f"📊 추출 결과:")
-    print(f"   추출된 솔루션 개수: {len(results)}")
-    print(f"   기대 개수: {expected_count}")
+    print(f"Extraction Result:")
+    print(f"   Extracted: {len(results)} solutions")
+    print(f"   Expected: {expected_count} solutions")
     print()
 
     if len(results) != expected_count:
-        print(f"❌ 테스트 실패!")
-        print(f"   원인: 추출 개수 불일치 (실제: {len(results)}, 기대: {expected_count})")
+        print(f"FAILED!")
+        print(f"   Reason: Count mismatch (actual: {len(results)}, expected: {expected_count})")
         print()
 
         if len(results) == 0:
-            print("💡 디버그 힌트:")
-            print("   1. re.split()이 카테고리를 분할하지 못함")
-            print("   2. 패턴 '### 🔹 전략 카테고리'가 텍스트에 존재하지 않음")
-            print("   3. 실제 GPT 출력은 단순히 '전략 카테고리 1:'로 시작")
+            print("Debug Hints:")
+            print("   1. re.split() failed to split categories")
+            print("   2. Pattern mismatch")
         else:
-            print(f"💡 부분 성공: {len(results)}개 추출됨")
-            print("   추출된 솔루션:")
+            print(f"Partial success: {len(results)} extracted")
+            print("   Solutions:")
             for i, sol in enumerate(results, 1):
-                print(f"   {i}. [그룹 {sol['solution_group']}] {sol['title'][:50]}...")
+                print(f"   {i}. [Group {sol['solution_group']}] {sol['title'][:50]}...")
 
         return False
     else:
-        print(f"✅ 테스트 성공!")
+        print(f"PASSED!")
         print()
-        print("추출된 솔루션 목록:")
+        print("Extracted Solutions:")
         for i, sol in enumerate(results, 1):
-            print(f"   {i}. [그룹 {sol['solution_group']}] {sol['title'][:60]}...")
+            print(f"   {i}. [Group {sol['solution_group']}] {sol['title'][:60]}...")
         return True
 
 
@@ -277,15 +276,11 @@ def main():
     메인 디버그 실행
     """
     print("\n" + "="*80)
-    print("🚀 extract_solutions 디버그 스크립트")
+    print("extract_solutions Debug Script")
     print("="*80)
     print()
-    print("목표: GPT 출력에서 9개 솔루션 추출 실패 원인 진단")
+    print("Goal: Test 9 solutions extraction")
     print()
-
-    # Regex 동작 분석
-    analyze_regex_behavior(SAMPLE_REPORT_1, "SAMPLE_REPORT_1")
-    analyze_regex_behavior(SAMPLE_REPORT_2, "SAMPLE_REPORT_2")
 
     # 실제 extract_solutions 테스트
     test1_passed = test_extract_solutions(SAMPLE_REPORT_1, "SAMPLE_REPORT_1", expected_count=9)
@@ -293,28 +288,15 @@ def main():
 
     # 최종 결과
     print(f"\n{'='*80}")
-    print("📋 최종 결과")
+    print("FINAL RESULT")
     print(f"{'='*80}\n")
 
     if test1_passed and test2_passed:
-        print("✅ 모든 테스트 통과!")
-        print("   extract_solutions가 정상적으로 9개 솔루션을 추출합니다.")
+        print("ALL TESTS PASSED")
+        print("extract_solutions correctly extracts 9 solutions.")
         sys.exit(0)
     else:
-        print("❌ 테스트 실패!")
-        print()
-        print("🔧 해결 방안:")
-        print("   1. 카테고리 분할 패턴 수정:")
-        print("      변경 전: r\"### 🔹 전략 카테고리 \\d+[:.] ...\"")
-        print("      변경 후: r\"(?:^|\\n)(?:\\*{0,2})전략 카테고리 \\d+[:.] ...\"")
-        print()
-        print("   2. 솔루션 추출 패턴 수정:")
-        print("      변경 전: r\"-\\s*\\*{0,2}솔루션 [A-Z][:.] ...\"")
-        print("      변경 후: r\"-\\s*\\*{0,2}솔루션 \\d+[:.] ...\"")
-        print()
-        print("   3. re.MULTILINE 플래그 추가:")
-        print("      카테고리 분할 시 ^, $ 앵커가 각 줄을 매칭하도록 설정")
-        print()
+        print("TESTS FAILED")
         sys.exit(1)
 
 
