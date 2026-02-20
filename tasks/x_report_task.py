@@ -5,12 +5,55 @@ GPT 기반 X-Report 생성 후 백엔드 API로 저장
 import os
 import json
 import requests
-from typing import Dict, Any, List
+import traceback
+from typing import Dict, Any, List, Optional
 from celery import Task
 from openai import OpenAI
+import openai  # For exceptions
 
 from celery_app import celery_app
 from app.core.config import settings
+
+
+# ──────────────────────────────────────────────────────────
+# 에러 처리 유틸리티
+# ──────────────────────────────────────────────────────────
+
+def format_error_message(
+    error_code: str,
+    message: str,
+    context: Optional[str] = None
+) -> str:
+    """
+    에러 메시지 표준 포맷
+
+    형식: "[{ERROR_CODE}] {message} | Context: {context}"
+
+    Args:
+        error_code: 에러 코드 (예: "STRATEGY_PARSE_COUNT_MISMATCH")
+        message: 핵심 메시지 (최대 500자)
+        context: 추가 컨텍스트 - report_text 일부, 스택 트레이스 등 (최대 500자)
+
+    Returns:
+        구조화된 에러 메시지 (최대 1000자)
+
+    Examples:
+        >>> format_error_message("PARSE_ERROR", "Invalid format", "sample text...")
+        "[PARSE_ERROR] Invalid format | Context: sample text..."
+    """
+    # 메시지 길이 제한
+    message = message[:500]
+
+    # 기본 포맷
+    formatted = f"[{error_code}] {message}"
+
+    # 컨텍스트 추가
+    if context:
+        context = context[:500]
+        formatted += f" | Context: {context}"
+
+    # 최종 길이 제한
+    return formatted[:1000]
 
 
 class XReportGenerationTask(Task):
@@ -24,7 +67,20 @@ class XReportGenerationTask(Task):
             print(f"[ERROR] Task failed for job_id={job_id}: {exc}")
 
 
-@celery_app.task(bind=True, base=XReportGenerationTask, name="tasks.generate_x_report")
+@celery_app.task(
+    bind=True,
+    base=XReportGenerationTask,
+    name="tasks.generate_x_report",
+    autoretry_for=(
+        openai.APIError,           # OpenAI API 오류 재시도
+        requests.Timeout,           # Timeout 오류 재시도
+        requests.HTTPError,         # HTTP 5xx 오류 재시도
+    ),
+    max_retries=3,                  # 최대 3회 재시도
+    retry_backoff=True,             # 지수 백오프 (1분 → 2분 → 4분)
+    retry_backoff_max=600,          # 최대 10분
+    default_retry_delay=60,         # 기본 재시도 간격 60초
+)
 def generate_x_report(
     self,
     job_id: int,
@@ -47,49 +103,120 @@ def generate_x_report(
 
     Returns:
         생성된 X-Report 정보
+
+    Raises:
+        ValueError: 전략 파싱 실패 (재시도 안 함)
+        openai.APIError: OpenAI API 오류 (재시도 후 실패)
+        requests.Timeout: 백엔드 API Timeout (재시도 후 실패)
+        requests.HTTPError: 백엔드 API 오류 (재시도 후 실패)
+
+    Note:
+        - ValueError는 autoretry_for에 포함되지 않아 즉시 실패 처리됩니다.
+        - 재시도 가능 예외도 max_retries 초과 시 최종 실패 처리됩니다.
+        - 모든 실패는 Job.status를 FAILED로 업데이트하고 error_message를 기록합니다.
     """
     print(f"[START] Generating X-Report for store={store_name}, job_id={job_id}")
 
-    # Job 상태를 PROCESSING으로 업데이트
-    update_job_status(job_id, "processing")
+    # 변수 초기화 (try 밖에서 선언하여 except 블록에서 접근 가능)
+    report_text = None
 
-    # OpenAI API Key 확인
-    api_key = settings.OPENAI_API_KEY
-    if not api_key:
-        raise ValueError("OPENAI_API_KEY not set in settings")
+    try:
+        # Job 상태를 PROCESSING으로 업데이트
+        update_job_status(job_id, "processing")
 
-    client = OpenAI(api_key=api_key)
+        # OpenAI API Key 확인
+        api_key = settings.OPENAI_API_KEY
+        if not api_key:
+            raise ValueError("OPENAI_API_KEY not set in settings")
 
-    # === Step 1: 매장 데이터 조회 ===
-    print("[1/4] Fetching store data from backend...")
-    store_data = fetch_store_data(store_id, snapshot_version)
+        client = OpenAI(api_key=api_key)
 
-    # === Step 2: GPT 분석 (Temperature 0.1) ===
-    print("[2/4] GPT analysis...")
-    analysis_result = call_gpt_analysis(client, store_data, store_name)
+        # === Step 1: 매장 데이터 조회 ===
+        print("[1/4] Fetching store data from backend...")
+        store_data = fetch_store_data(store_id, snapshot_version)
 
-    # === Step 3: X-Report 생성 (Temperature 0.7) ===
-    print("[3/4] GPT X-Report generation...")
-    report_text = call_gpt_report(client, store_data, store_name, analysis_result)
+        # === Step 2: GPT 분석 (Temperature 0.1) ===
+        print("[2/4] GPT analysis...")
+        analysis_result = call_gpt_analysis(client, store_data, store_name)
 
-    # === Step 4: 9개 전략 추출 ===
-    print("[4/4] Extracting strategies...")
-    strategies = extract_solutions(report_text)
+        # === Step 3: X-Report 생성 (Temperature 0.7) ===
+        print("[3/4] GPT X-Report generation...")
+        report_text = call_gpt_report(client, store_data, store_name, analysis_result)
 
-    # === Step 5: 백엔드 API로 저장 ===
-    print("[5/5] Saving to backend...")
-    result = save_to_backend(
-        job_id=job_id,
-        store_source_id=store_source_id,
-        snapshot_version=snapshot_version,
-        prompt_id=prompt_id,
-        content_text=report_text,
-        strategies=strategies,
-        analysis_log=analysis_result,
-    )
+        # === Step 4: 9개 전략 추출 ===
+        print("[4/4] Extracting strategies...")
+        strategies = extract_solutions(report_text)
 
-    print(f"[SUCCESS] X-Report created: report_id={result.get('id')}")
-    return result
+        # === Step 5: 백엔드 API로 저장 ===
+        print("[5/5] Saving to backend...")
+        result = save_to_backend(
+            job_id=job_id,
+            store_source_id=store_source_id,
+            snapshot_version=snapshot_version,
+            prompt_id=prompt_id,
+            content_text=report_text,
+            strategies=strategies,
+            analysis_log=analysis_result,
+        )
+
+        print(f"[SUCCESS] X-Report created: report_id={result.get('id')}")
+        return result
+
+    except ValueError as e:
+        # [A] ValueError: 전략 파싱 오류 - 재시도 안 함
+        error_msg = format_error_message(
+            error_code="STRATEGY_PARSE_COUNT_MISMATCH",
+            message=str(e),
+            context=report_text[:500] if report_text else "No report text generated"
+        )
+        update_job_failed(job_id, error_msg)
+        print(f"[FAILED] ValueError: {e}")
+        raise  # Celery에 실패 전파 (재시도 안 함)
+
+    except requests.Timeout as e:
+        # [B-1] Timeout: 재시도 대상, 최종 실패 시 처리
+        error_msg = format_error_message(
+            error_code="BACKEND_TIMEOUT",
+            message=f"Backend API timeout: {str(e)}",
+            context=f"URL: {e.request.url if hasattr(e, 'request') else 'N/A'}"
+        )
+        update_job_failed(job_id, error_msg)
+        print(f"[FAILED] Timeout after retries: {e}")
+        raise  # Celery에 실패 전파 (재시도 또는 최종 실패)
+
+    except requests.HTTPError as e:
+        # [B-2] HTTPError: 재시도 대상, 최종 실패 시 처리
+        error_msg = format_error_message(
+            error_code="BACKEND_API_ERROR",
+            message=f"Backend API error: {e.response.status_code if e.response else 'N/A'} - {str(e)}",
+            context=f"URL: {e.request.url if hasattr(e, 'request') else 'N/A'}"
+        )
+        update_job_failed(job_id, error_msg)
+        print(f"[FAILED] HTTPError after retries: {e}")
+        raise  # Celery에 실패 전파 (재시도 또는 최종 실패)
+
+    except openai.APIError as e:
+        # [B-3] OpenAI APIError: 재시도 대상, 최종 실패 시 처리
+        error_msg = format_error_message(
+            error_code="LLM_API_ERROR",
+            message=f"OpenAI API error: {str(e)}",
+            context=f"Type: {type(e).__name__}"
+        )
+        update_job_failed(job_id, error_msg)
+        print(f"[FAILED] OpenAI APIError after retries: {e}")
+        raise  # Celery에 실패 전파 (재시도 또는 최종 실패)
+
+    except Exception as e:
+        # [C] 기타 모든 예외: 재시도 안 함
+        error_msg = format_error_message(
+            error_code="UNKNOWN_ERROR",
+            message=f"Unexpected error: {type(e).__name__} - {str(e)}",
+            context=traceback.format_exc()[:500]
+        )
+        update_job_failed(job_id, error_msg)
+        print(f"[FAILED] Unexpected error: {e}")
+        print(traceback.format_exc())
+        raise  # Celery에 실패 전파 (재시도 안 함)
 
 
 def fetch_store_data(store_id: str, snapshot_version: str) -> Dict[str, Any]:
@@ -438,7 +565,17 @@ def _normalize_solution_text(text: str) -> str:
 
 
 def update_job_status(job_id: int, status: str) -> None:
-    """Job 상태 업데이트"""
+    """
+    Job 상태 업데이트
+
+    Args:
+        job_id: Job ID
+        status: 업데이트할 상태 (processing, completed, failed)
+
+    Note:
+        이 함수는 실패해도 예외를 발생시키지 않습니다.
+        Job 상태 업데이트는 중요하지만 필수적이지 않습니다.
+    """
     url = f"http://127.0.0.1:8000/jobs/{job_id}/status"
     payload = {"status": status}
     headers = {
@@ -447,12 +584,46 @@ def update_job_status(job_id: int, status: str) -> None:
     }
 
     try:
-        response = requests.patch(url, json=payload, headers=headers, timeout=10)
+        # Timeout: (connect=2초, read=5초)
+        response = requests.patch(url, json=payload, headers=headers, timeout=(2, 5))
         response.raise_for_status()
         print(f"[INFO] Job {job_id} status updated to {status}")
     except requests.exceptions.RequestException as e:
         print(f"[WARNING] Failed to update job status: {e}")
         # Don't raise - this is not critical
+
+
+def update_job_failed(job_id: int, error_message: str) -> None:
+    """
+    Job 상태를 FAILED로 업데이트하고 에러 메시지 기록
+
+    Args:
+        job_id: Job ID
+        error_message: 구조화된 에러 메시지 (format_error_message로 생성)
+
+    Note:
+        이 함수는 실패해도 예외를 발생시키지 않습니다.
+        Job 상태 업데이트 실패가 전체 task를 중단시키지 않도록 합니다.
+    """
+    url = f"http://127.0.0.1:8000/jobs/{job_id}/status"
+    payload = {
+        "status": "failed",
+        "error_message": error_message
+    }
+    headers = {
+        "Content-Type": "application/json",
+        "X-API-Key": settings.WORKER_API_KEY,
+    }
+
+    try:
+        # Timeout: (connect=2초, read=5초)
+        response = requests.patch(url, json=payload, headers=headers, timeout=(2, 5))
+        response.raise_for_status()
+        print(f"[ERROR] Job {job_id} marked as FAILED: {error_message[:100]}...")
+    except requests.exceptions.RequestException as e:
+        print(f"[CRITICAL] Failed to update job {job_id} to FAILED status: {e}")
+        print(f"[CRITICAL] Original error was: {error_message[:200]}...")
+        # Don't raise - we already know the task failed
 
 
 def save_to_backend(
@@ -464,8 +635,29 @@ def save_to_backend(
     strategies: List[Dict],
     analysis_log: str,
 ) -> Dict[str, Any]:
-    """백엔드 API로 X-Report 저장"""
+    """
+    백엔드 API로 X-Report 저장
 
+    Args:
+        job_id: Job ID
+        store_source_id: 매장 소스 ID
+        snapshot_version: 스냅샷 버전
+        prompt_id: 프롬프트 ID
+        content_text: X-Report 본문
+        strategies: 9개 전략 리스트
+        analysis_log: GPT 분석 로그
+
+    Returns:
+        저장된 X-Report 정보
+
+    Raises:
+        requests.Timeout: 백엔드 API 타임아웃
+        requests.HTTPError: 백엔드 API HTTP 오류
+
+    Note:
+        - Timeout: (connect=3초, read=30초) 분리 설정
+        - 재시도는 Celery task 레벨에서 처리
+    """
     url = "http://127.0.0.1:8000/x-reports/save"
 
     payload = {
@@ -485,9 +677,17 @@ def save_to_backend(
     }
 
     try:
-        response = requests.post(url, json=payload, headers=headers, timeout=60)
+        # Timeout: (connect timeout, read timeout)
+        # connect: 3초 - 서버 연결 시도
+        # read: 30초 - 응답 대기 (DB 트랜잭션 고려)
+        response = requests.post(
+            url,
+            json=payload,
+            headers=headers,
+            timeout=(3.05, 30)
+        )
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:
         print(f"[ERROR] Failed to save to backend: {e}")
-        raise
+        raise  # Celery task에서 재시도 또는 실패 처리

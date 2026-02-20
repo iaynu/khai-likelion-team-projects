@@ -20,6 +20,7 @@ router = APIRouter(prefix="/jobs", tags=["jobs"])
 
 class JobStatusUpdate(BaseModel):
     status: str
+    error_message: Optional[str] = None  # FAILED 상태 시 에러 메시지
 
 
 def verify_worker_api_key(x_api_key: str = Header(...)) -> None:
@@ -114,6 +115,7 @@ async def update_job_status(
     작업 상태 업데이트 (Worker 전용)
 
     Worker가 작업 처리 중 상태를 업데이트합니다.
+    status가 'failed'인 경우 error_message도 함께 업데이트합니다.
     """
     repo = JobRepo(db)
     job = await repo.get_by_id(job_id)
@@ -133,12 +135,20 @@ async def update_job_status(
             detail={"code": "INVALID_STATUS", "message": f"Invalid status: {body.status}"}
         )
 
-    # 상태 업데이트
-    job = await repo.update_status(job_id, new_status)
+    # 상태 업데이트 (error_message 포함)
+    job = await repo.update_status(
+        job_id,
+        new_status,
+        error_message=body.error_message
+    )
     await db.commit()
     await db.refresh(job)
 
-    logger.info(f"Job {job_id} status updated to {new_status}")
+    if new_status == JobStatus.FAILED:
+        logger.error(f"Job {job_id} status updated to FAILED: {body.error_message[:100] if body.error_message else 'No error message'}")
+    else:
+        logger.info(f"Job {job_id} status updated to {new_status}")
+
     return JobOut.model_validate(job, from_attributes=True)
 
 
