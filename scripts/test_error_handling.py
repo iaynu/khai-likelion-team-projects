@@ -21,6 +21,17 @@ def test_format_error_message():
     print("Test: format_error_message")
     print("="*80)
 
+    # Test 0: Context 없을 때 "| Context:" 생략 확인
+    print("\n[Test 0] No context - should omit '| Context:' part")
+    result = format_error_message(
+        error_code="TEST_NO_CONTEXT",
+        message="Error message without context"
+    )
+    print(f"Result: {result}")
+    assert "| Context:" not in result
+    assert result == "[TEST_NO_CONTEXT] Error message without context"
+    print("PASS")
+
     # Test 1: 기본 포맷
     print("\n[Test 1] Basic format")
     result = format_error_message(
@@ -83,6 +94,45 @@ def test_format_error_message():
     print(f"Result length: {len(result)}")
     assert len(result) == 1000  # 정확히 1000자로 잘림
     print("PASS")
+
+    # Test 6: Traceback truncate 검증 (UNKNOWN_ERROR 시나리오)
+    print("\n[Test 6] Traceback truncate verification")
+
+    # 의도적으로 긴 traceback 생성
+    def deep_function_5():
+        raise Exception("Deep error with very long message " + "X" * 500)
+
+    def deep_function_4():
+        deep_function_5()
+
+    def deep_function_3():
+        deep_function_4()
+
+    def deep_function_2():
+        deep_function_3()
+
+    def deep_function_1():
+        deep_function_2()
+
+    try:
+        deep_function_1()
+    except Exception as e:
+        import traceback
+        full_traceback = traceback.format_exc()
+        print(f"Original traceback length: {len(full_traceback)} chars")
+
+        # format_error_message에 긴 traceback 전달
+        result = format_error_message(
+            error_code="UNKNOWN_ERROR",
+            message=f"Unexpected error: {type(e).__name__} - {str(e)[:100]}",
+            context=full_traceback  # 긴 traceback 전달
+        )
+
+        print(f"Formatted message length: {len(result)} chars")
+        assert len(result) <= 1000, f"Message too long: {len(result)} > 1000"
+        assert result.startswith("[UNKNOWN_ERROR]")
+        assert "| Context:" in result
+        print("PASS: Traceback correctly truncated to <= 1000 chars")
 
     print("\n" + "="*80)
     print("All format_error_message tests PASSED")
