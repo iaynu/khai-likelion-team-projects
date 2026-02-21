@@ -13,7 +13,7 @@ FastAPI + PostgreSQL + Celery 기반 상권 분석 백엔드. 비동기 Job Queu
 | Migration | Alembic |
 | DB | PostgreSQL 15+ / SQLite (개발/테스트) |
 | Job Queue | Celery, Redis |
-| LLM | OpenAI gpt-5.2 |
+| LLM | OpenAI gpt-4-turbo |
 | 컨테이너 | Docker, docker-compose |
 | 테스트 | pytest, pytest-asyncio, httpx, aiosqlite |
 
@@ -32,18 +32,18 @@ FastAPI + PostgreSQL + Celery 기반 상권 분석 백엔드. 비동기 Job Queu
 └─────────────────┘
         ↓
 ┌─────────────────┐
-│  Celery Worker  │
-│  (GPU 가능)     │
-└─────────────────┘
-        ↓
-┌─────────────────┐
-│  OpenAI API     │
-│  (gpt-5.2)      │
-└─────────────────┘
-        ↓
-┌─────────────────┐
-│  POST /x-reports│
-│  /save          │
+│  Celery Worker  │ ←─┐
+│  (GPU 가능)     │   │
+└─────────────────┘   │
+        ↓             │
+┌─────────────────┐   │
+│  OpenAI API     │   │
+│  (gpt-4-turbo)  │   │
+└─────────────────┘   │
+        ↓             │
+┌─────────────────┐   │
+│   PostgreSQL    │ ←─┘
+│ (직접 DB 접근)  │
 └─────────────────┘
 ```
 
@@ -78,7 +78,7 @@ app/
 └── api/routers/            # FastAPI 라우터
     ├── jobs.py             # Job 관리 API
     ├── stores.py
-    └── x_reports.py        # X-Report API (Worker 전용 /save 포함)
+    └── x_reports.py        # X-Report 조회 API (/save는 deprecated)
 
 tasks/                      # Celery Tasks
 ├── __init__.py
@@ -112,9 +112,13 @@ REDIS_URL=redis://localhost:6379/0
 CELERY_BROKER_URL=redis://localhost:6379/0
 CELERY_RESULT_BACKEND=redis://localhost:6379/1
 
-# API Keys
-WORKER_API_KEY=your-secret-worker-key
+# OpenAI API
 OPENAI_API_KEY=sk-...
+
+# Optional: Debugging
+SQL_ECHO=False          # True로 설정 시 SQL 쿼리 로깅
+LOG_LEVEL=INFO          # DEBUG, INFO, WARNING, ERROR
+USE_OPENAI_MOCK_MODE=   # OK_9, INVALID_COUNT 등 (테스트용)
 ```
 
 #### 1-3. 패키지 설치
@@ -275,9 +279,11 @@ pytest tests/test_strategy_json_first.py -v
 | 항목 | 설명 |
 |---|---|
 | **비동기 Job Queue** | Celery + Redis로 장시간 실행 작업(GPT 호출) 비동기 처리 |
-| **Worker API Key** | Worker가 `/x-reports/save` 호출 시 `X-API-Key` 헤더로 인증 |
-| **Job 상태 관리** | pending → processing → completed/failed |
-| **gpt-5.2 통합** | 2단계 호출: (1) 분석(temp=0.1) → (2) 전략 생성(temp=0.7) |
+| **Job 상태 관리** | pending → processing → completed/failed (3-트랜잭션 모델) |
+| **GPT 통합** | 2단계 호출: (1) 분석(temp=0.1) → (2) 전략 생성(temp=0.7, JSON 모드) |
+| **JSON-first 파서** | GPT JSON 출력 우선 파싱, 실패 시 텍스트 fallback |
+| **DB 직접 접근** | Worker가 asyncio.run()으로 DB 직접 접근 (HTTP 제거) |
+| **트랜잭션 원자성** | TX1(PROCESSING) → TX2(atomic save) → TX3(FAILED) 보장 |
 | **store_source_id** | 원천 JSON의 `store_id` — business key로 upsert |
 | **merged_input** | `fn_get_merged_input()` Postgres function으로 동적 생성 |
 | **전략 9개** | 3개 솔루션 그룹 × 3개 액션 = 9개, 단일 트랜잭션 저장 |
@@ -337,7 +343,7 @@ Error: OPENAI_API_KEY not set in settings
 - [x] 로컬 검증 스크립트 작성 (서버/Worker 없이)
 
 ### 진행 예정
-- [ ] GPT Prompt 최적화 (JSON 출력 품질 개선)
+- [ ] GPT 모델명 수정 (gpt-5.2 → gpt-4-turbo)
 - [ ] Y-Report Task 추가
 - [ ] Simulation Task 추가
 - [ ] GPU 머신 배포
