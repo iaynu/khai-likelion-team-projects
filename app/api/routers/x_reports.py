@@ -84,7 +84,15 @@ async def get_strategies(report_id: int, db: AsyncSession = Depends(get_db)):
 @router.post("/save", response_model=XReportOut, status_code=201, dependencies=[Depends(verify_worker_api_key)])
 async def save_x_report(body: XReportSaveRequest, db: AsyncSession = Depends(get_db)):
     """
-    Worker가 생성한 X-Report 저장 (Worker 전용 API)
+    [DEPRECATED] Worker가 생성한 X-Report 저장 (Worker 전용 API - 레거시)
+
+    **주의**: 이 엔드포인트는 더 이상 Worker에서 사용되지 않습니다.
+    Worker는 이제 DB에 직접 접근하여 트랜잭션 원자성을 보장합니다.
+    (tasks/x_report_task.py의 _save_report_async 참조)
+
+    이 엔드포인트는 하위 호환성을 위해 유지되며, 향후 제거될 수 있습니다.
+
+    ---
 
     Worker가 LLM으로 생성한 X-Report와 12개 Strategies를 저장합니다.
     API Key 인증 필요: Header에 X-API-Key 포함

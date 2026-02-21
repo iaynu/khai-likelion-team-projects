@@ -242,12 +242,31 @@ http://127.0.0.1:8000/docs
 
 ## 테스트 실행
 
+### pytest 단위 테스트
+
 ```bash
 pip install -r requirements.txt
 pytest tests/ -v
 ```
 
 in-memory SQLite를 사용하여 DB 없이 실행됩니다.
+
+### 로컬 검증 스크립트 (서버/Worker 없이)
+
+트랜잭션 원자성 및 실패 전파를 검증하는 독립 실행형 스크립트:
+
+```bash
+# Job 실패 전파 E2E 검증
+USE_OPENAI_MOCK_MODE=OK_9 python scripts/verify_job_failure_propagation.py
+
+# 트랜잭션 원자성 검증
+python scripts/test_atomicity.py
+
+# JSON-first 파서 회귀 테스트 (OpenAI 호출 없음)
+pytest tests/test_strategy_json_first.py -v
+```
+
+자세한 사용법 및 디버깅 옵션: [docs/LOCAL_VERIFY.md](docs/LOCAL_VERIFY.md)
 
 ---
 
@@ -309,13 +328,22 @@ Error: OPENAI_API_KEY not set in settings
 
 ## 다음 단계
 
-- [ ] Worker에서 실제 Store 데이터 조회 구현 ✅
-- [ ] GPT Prompt 최적화
-- [ ] Strategy 추출 Regex 개선 (현재 0개 추출 이슈)
+### 완료된 작업 ✅
+- [x] Worker에서 실제 Store 데이터 조회 구현
+- [x] Strategy 추출 파서 개선 (0개 → 9개 정상 추출)
+- [x] Job 실패 전파 및 에러 핸들링 구현
+- [x] DB 직접 접근 및 트랜잭션 원자성 보장
+- [x] JSON-first 파서 구현 (GPT JSON 모드 + fallback)
+- [x] 로컬 검증 스크립트 작성 (서버/Worker 없이)
+
+### 진행 예정
+- [ ] GPT Prompt 최적화 (JSON 출력 품질 개선)
 - [ ] Y-Report Task 추가
 - [ ] Simulation Task 추가
 - [ ] GPU 머신 배포
 - [ ] Production 환경 설정 (PostgreSQL, 환경변수 관리)
+- [ ] CI/CD 파이프라인 구축
+- [ ] 모니터링 및 로깅 시스템 (Sentry, Prometheus)
 
 ---
 

@@ -35,6 +35,43 @@ class XReportRepo:
         await self.session.flush()
         return report
 
+    async def create_completed(
+        self,
+        store_id: str,
+        snapshot_id: int,
+        prompt_id: str,
+        content_text: str,
+        config_json: Optional[dict] = None,
+        model_meta: Optional[dict] = None,
+    ) -> XReport:
+        """
+        Create a completed XReport with full content.
+
+        Args:
+            store_id: Store ID
+            snapshot_id: Snapshot ID
+            prompt_id: Prompt ID
+            content_text: Full GPT-generated text
+            config_json: Optional config metadata
+            model_meta: Optional model metadata (model name, tokens, etc.)
+
+        Returns:
+            Created XReport object
+        """
+        report = XReport(
+            store_id=store_id,
+            snapshot_id=snapshot_id,
+            prompt_id=prompt_id,
+            status="completed",
+            content_text=content_text,
+            config_json=config_json,
+            model_meta=model_meta,
+        )
+        self.session.add(report)
+        await self.session.flush()
+        await self.session.refresh(report)
+        return report
+
     async def get_merged_input(self, store_id: str, snapshot_id: int) -> dict:
         """Calls fn_get_merged_input Postgres function. Falls back gracefully on SQLite."""
         result = await self.session.execute(

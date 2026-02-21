@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     APP_TITLE: str = "Backbone Backend"
     APP_VERSION: str = "0.1.0"
     DEBUG: bool = True
+    SQL_ECHO: bool = False  # Set to True to enable SQL query logging
 
     model_config = SettingsConfigDict(
         env_file=".env",
