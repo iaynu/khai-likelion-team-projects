@@ -1,6 +1,7 @@
 from typing import Optional, List, Dict, Any
 from datetime import datetime
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
+from pydantic.alias_generators import to_camel
 
 
 class StrategySaveData(BaseModel):
@@ -56,6 +57,54 @@ class XReportCreateRequest(BaseModel):
     force_regenerate: bool = False
 
 
+# ── X-Report View DTO (BACKEND-2 전용) ────────────────────────────────────────
+
+class RadarDataItem(BaseModel):
+    """레이더 차트 한 축의 데이터 (Recharts 형식)"""
+    subject: str
+    A: int = Field(..., alias="A")      # Recharts 데이터 키 — 대문자 유지
+    fullMark: int = 100
+    reason: Optional[str] = None
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class KeywordItem(BaseModel):
+    """키워드 클라우드 한 항목"""
+    text: str
+    sentiment: str  # "neutral" | "positive" | "negative"
+
+
+class SolutionItem(BaseModel):
+    """전략 솔루션 한 항목"""
+    category: str
+    title: str
+    desc: str
+    execution: str
+    effect: str = ""
+
+
+class XReportViewOut(BaseModel):
+    """프론트 X-Report View DTO — camelCase 출력 (BACKEND-2 전용)"""
+
+    model_config = ConfigDict(
+        populate_by_name=True,
+        alias_generator=to_camel,
+    )
+
+    id: int
+    store_id: str
+    name: Optional[str] = None          # store_name — view service 에서 조회
+    status: str
+    grade: Optional[str] = None
+    rank_percent: Optional[int] = None
+    radar_data: List[RadarDataItem] = Field(default_factory=list)
+    keywords: List[KeywordItem] = Field(default_factory=list)
+    solutions: List[SolutionItem] = Field(default_factory=list)
+    description: Optional[str] = None
+    full_report: Optional[str] = None
+
+
 class XReportOut(BaseModel):
     id: int
     store_id: str
@@ -68,3 +117,4 @@ class XReportOut(BaseModel):
     created_at: Optional[datetime] = None
     finished_at: Optional[datetime] = None
     error_message: Optional[str] = None
+    cached: Optional[bool] = None  # True=캐시 반환, False=신규/재생성, None=정보 없음

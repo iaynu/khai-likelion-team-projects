@@ -1,5 +1,5 @@
 from typing import Optional, List, Tuple
-from sqlalchemy import select
+from sqlalchemy import select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.store import Store
 
@@ -35,6 +35,34 @@ class StoreRepo:
     async def count(self) -> int:
         from sqlalchemy import func
         result = await self.session.execute(select(func.count(Store.id)))
+        return result.scalar_one()
+
+    def _name_filter(self, q: str):
+        """PostgreSQL: ILIKE / SQLite: lower().like() — DB-agnostic name search."""
+        term = f"%{q.lower()}%"
+        return or_(
+            func.lower(Store.store_name).like(term),
+            func.lower(Store.area_code).like(term),
+        )
+
+    async def search(
+        self,
+        q: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> List[Store]:
+        stmt = select(Store)
+        if q:
+            stmt = stmt.where(self._name_filter(q))
+        stmt = stmt.order_by(Store.store_name).limit(limit).offset(offset)
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
+    async def count_filtered(self, q: Optional[str] = None) -> int:
+        stmt = select(func.count(Store.id))
+        if q:
+            stmt = stmt.where(self._name_filter(q))
+        result = await self.session.execute(stmt)
         return result.scalar_one()
 
     async def upsert(

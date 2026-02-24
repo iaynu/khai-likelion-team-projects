@@ -5,9 +5,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_db
 from app.core.config import settings
-from app.schemas.x_report import XReportCreateRequest, XReportSaveRequest, XReportOut
+from app.schemas.x_report import XReportCreateRequest, XReportSaveRequest, XReportOut, XReportViewOut
 from app.schemas.strategy import StrategyListOut, StrategyOut
 from app.services.x_report_service import create_x_report
+from app.services.x_report_view_service import build_x_report_view
 from app.repositories.x_report_repo import XReportRepo
 from app.repositories.strategy_repo import StrategyRepo
 from app.repositories.store_repo import StoreRepo
@@ -53,7 +54,9 @@ async def generate_x_report(body: XReportCreateRequest, db: AsyncSession = Depen
         raise HTTPException(status_code=404, detail={"code": "NOT_FOUND", "message": str(exc)})
 
     report = result["report"]
-    return XReportOut.model_validate(report, from_attributes=True)
+    out = XReportOut.model_validate(report, from_attributes=True)
+    out.cached = result.get("cached")
+    return out
 
 
 @router.get("/{report_id}", response_model=XReportOut)
@@ -63,6 +66,27 @@ async def get_x_report(report_id: int, db: AsyncSession = Depends(get_db)):
     if report is None:
         raise HTTPException(status_code=404, detail={"code": "XREPORT_NOT_FOUND", "message": f"id={report_id}"})
     return XReportOut.model_validate(report, from_attributes=True)
+
+
+@router.get("/{report_id}/view", response_model=XReportViewOut)
+async def get_x_report_view(report_id: int, db: AsyncSession = Depends(get_db)):
+    """X-Report View DTO — 프론트엔드 전용 가공 데이터.
+
+    - `radarData`: 맛/서비스/분위기/가격/위생 5개 축 레이더 차트
+    - `keywords`:  키워드 클라우드 목록
+    - `solutions`: 최대 9개 전략 솔루션
+    - `fullReport`: 원본 LLM 텍스트 전문
+
+    sources:
+        solutions ← config_json.categories → config_json.strategies → DB strategies
+    """
+    view = await build_x_report_view(session=db, report_id=report_id)
+    if view is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "XREPORT_NOT_FOUND", "message": f"id={report_id}"},
+        )
+    return view
 
 
 @router.get("/{report_id}/strategies", response_model=StrategyListOut)
@@ -87,8 +111,9 @@ async def save_x_report(body: XReportSaveRequest, db: AsyncSession = Depends(get
     [DEPRECATED] Worker가 생성한 X-Report 저장 (Worker 전용 API - 레거시)
 
     **주의**: 이 엔드포인트는 더 이상 Worker에서 사용되지 않습니다.
-    Worker는 이제 DB에 직접 접근하여 트랜잭션 원자성을 보장합니다.
-    (tasks/x_report_task.py의 _save_report_async 참조)
+    Worker는 이제 generate_or_get_x_report() 서비스 함수를 통해
+    캐시/재생성/IntegrityError 흡수를 포함한 단일 진입점으로 저장합니다.
+    (tasks/x_report_task.py의 _save_via_service → app/services/x_report_service.py 참조)
 
     이 엔드포인트는 하위 호환성을 위해 유지되며, 향후 제거될 수 있습니다.
 

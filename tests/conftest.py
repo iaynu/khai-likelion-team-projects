@@ -25,6 +25,11 @@ from app.db import session as _session_mod  # noqa: E402
 TEST_ENGINE = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
 TestingSessionLocal = async_sessionmaker(TEST_ENGINE, class_=AsyncSession, expire_on_commit=False)
 
+# Route get_async_session() (used by simulation/y_report routers) to the same in-memory DB.
+# Without this, get_engine() would create a separate :memory: instance with no tables.
+import app.db.base as _base_mod  # noqa: E402
+_base_mod._engine = TEST_ENGINE
+
 
 @pytest_asyncio.fixture(autouse=True)
 async def setup_db():

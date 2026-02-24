@@ -18,11 +18,12 @@ from app.core.config import settings
 # DB 직접 접근을 위한 imports
 from app.db.session import get_async_session
 from app.repositories.job_repo import JobRepo
-from app.repositories.x_report_repo import XReportRepo
-from app.repositories.strategy_repo import StrategyRepo
 from app.repositories.store_repo import StoreRepo
 from app.repositories.snapshot_repo import SnapshotRepo
 from app.models.job import JobStatus
+
+# 단일 저장 진입점
+from app.services.x_report_service import generate_or_get_x_report
 
 
 # ──────────────────────────────────────────────────────────
@@ -91,89 +92,75 @@ async def _update_job_processing_async(job_id: int) -> None:
     print(f"[TX1-COMMIT] Job {job_id} status → PROCESSING")
 
 
-async def _save_report_async(
+async def _save_via_service(
     job_id: int,
     store_source_id: str,
     snapshot_version: str,
     prompt_id: str,
-    content_text: str,
-    strategies: List[Dict],
-    analysis_log: str,
-    model_meta: Dict[str, Any],
+    report_payload: Dict[str, Any],
+    strategies_payload: List[Dict],
+    force_regenerate: bool = False,
 ) -> Dict[str, Any]:
     """
-    [Transaction 2] XReport + Strategies + Job COMPLETED 원자적 저장 (단일 트랜잭션)
+    [TX2] generate_or_get_x_report() 단일 진입점 호출 wrapper.
+
+    - repo 직접 접근 없음 — 캐시/재생성/IntegrityError 흡수는 서비스에 위임
+    - Store + Snapshot 해석 후 서비스 함수 호출
+    - generate_or_get_x_report() 가 job COMPLETED 업데이트까지 수행함
 
     Args:
-        job_id: Job ID
-        store_source_id: 매장 소스 ID
-        snapshot_version: 스냅샷 버전
-        prompt_id: 프롬프트 ID
-        content_text: X-Report 본문
-        strategies: 9개 전략 리스트
-        analysis_log: GPT 분석 로그
-        model_meta: GPT 응답 메타데이터 (model, request_id, tokens 등)
+        job_id:              Celery Job ID (서비스가 result_id + COMPLETED 기록)
+        store_source_id:     외부 매장 식별자
+        snapshot_version:    스냅샷 버전 문자열
+        prompt_id:           프롬프트 식별자
+        report_payload:      {content_text, config_json, model_meta}
+        strategies_payload:  정확히 9개 strategy dict
+        force_regenerate:    True 이면 기존 SUCCEEDED 행 덮어쓰기
 
     Returns:
-        저장된 X-Report 정보 (id, store_id, snapshot_id, prompt_id)
-
-    Raises:
-        Exception: DB 트랜잭션 실패 시 rollback 후 예외 발생
+        {id, store_id, snapshot_id, prompt_id, status, cached}
     """
     async with get_async_session() as session:
-        async with session.begin():
-            # ──── 단일 트랜잭션 시작 ────
-            job_repo = JobRepo(session)
-            store_repo = StoreRepo(session)
-            snapshot_repo = SnapshotRepo(session)
-            xreport_repo = XReportRepo(session)
-            strategy_repo = StrategyRepo(session)
+        # Store + Snapshot 해석 (primitive ID 추출)
+        store_repo = StoreRepo(session)
+        snapshot_repo = SnapshotRepo(session)
 
-            # 1. Store 조회
-            store = await store_repo.get_by_source_id(store_source_id)
-            if not store:
-                raise ValueError(f"Store not found: store_source_id={store_source_id}")
+        store = await store_repo.get_by_source_id(store_source_id)
+        if not store:
+            raise ValueError(f"Store not found: store_source_id={store_source_id}")
 
-            # 2. Snapshot 조회/생성
-            snapshot = await snapshot_repo.get_by_version(snapshot_version)
-            if not snapshot:
-                snapshot = await snapshot_repo.create(snapshot_version)
-                await session.flush()
+        snapshot = await snapshot_repo.get_by_version(snapshot_version)
+        if not snapshot:
+            snapshot = await snapshot_repo.create(snapshot_version)
+            await session.flush()
 
-            # 3. XReport 생성
-            xreport = await xreport_repo.create_completed(
-                store_id=store.id,
-                snapshot_id=snapshot.id,
-                prompt_id=prompt_id,
-                content_text=content_text,
-                config_json={"analysis_log": analysis_log},
-                model_meta=model_meta,  # GPT 응답 메타데이터
-            )
+        # ORM 객체에서 ID를 primitive로 추출 (rollback 후 객체 만료 대비)
+        store_id_val = str(store.id)
+        snapshot_id_val = snapshot.id
 
-            # 4. Strategies 9개 생성
-            await strategy_repo.bulk_create(
-                x_report_id=xreport.id,
-                strategies=strategies,
-            )
+        # 단일 서비스 진입점 호출 — 캐시/재생성/IntegrityError/job 업데이트 모두 처리
+        x_report, cached = await generate_or_get_x_report(
+            session=session,
+            store_id=store_id_val,
+            snapshot_id=snapshot_id_val,
+            prompt_id=prompt_id,
+            report_payload=report_payload,
+            strategies_payload=strategies_payload,
+            force_regenerate=force_regenerate,
+            job_id=job_id,
+        )
 
-            # 5. Job 상태 → COMPLETED
-            await job_repo.update_status(
-                job_id=job_id,
-                status=JobStatus.COMPLETED,
-                result_id=xreport.id,
-                progress=100,
-            )
+    cached_flag = "[CACHED]" if cached else "[CREATED]"
+    print(f"[TX2-COMMIT] XReport {x_report.id} + Job COMPLETED {cached_flag}")
 
-            # ──── 단일 트랜잭션 커밋 (자동) ────
-            print(f"[TX2-COMMIT] XReport {xreport.id} + 9 Strategies + Job COMPLETED")
-
-            return {
-                "id": xreport.id,
-                "store_id": xreport.store_id,
-                "snapshot_id": xreport.snapshot_id,
-                "prompt_id": xreport.prompt_id,
-                "status": xreport.status,
-            }
+    return {
+        "id": x_report.id,
+        "store_id": x_report.store_id,
+        "snapshot_id": x_report.snapshot_id,
+        "prompt_id": x_report.prompt_id,
+        "status": x_report.status,
+        "cached": cached,
+    }
 
 
 async def _update_job_failed_async(job_id: int, error_message: str) -> None:
@@ -238,20 +225,22 @@ def generate_x_report(
     store_name: str,
     snapshot_version: str,
     prompt_id: str,
+    force_regenerate: bool = False,
 ) -> Dict[str, Any]:
     """
     X-Report 생성 Task
 
     Args:
         job_id: Job ID
-        store_id: Store UUID
-        store_source_id: 매장 소스 ID
+        store_id: Store UUID (fetch_store_data 용)
+        store_source_id: 매장 소스 ID (DB 조회 용)
         store_name: 매장 이름
         snapshot_version: 스냅샷 버전
         prompt_id: 프롬프트 ID
+        force_regenerate: True 이면 기존 SUCCEEDED 결과도 덮어씀
 
     Returns:
-        생성된 X-Report 정보
+        생성된 X-Report 정보 {id, store_id, snapshot_id, prompt_id, status, cached}
 
     Raises:
         ValueError: 전략 파싱 실패 (재시도 안 함)
@@ -262,6 +251,7 @@ def generate_x_report(
     Note:
         - ValueError는 autoretry_for에 포함되지 않아 즉시 실패 처리됩니다.
         - 재시도 가능 예외도 max_retries 초과 시 최종 실패 처리됩니다.
+        - IntegrityError(중복 실행)는 서비스 레이어가 캐시 히트로 흡수 — FAILED 없음.
         - 모든 실패는 Job.status를 FAILED로 업데이트하고 error_message를 기록합니다.
     """
     print(f"[START] Generating X-Report for store={store_name}, job_id={job_id}")
@@ -304,21 +294,26 @@ def generate_x_report(
         strategies = extract_solutions(report_text)
 
         # ──────────────────────────────────────────────────────────
-        # [TX2] XReport + Strategies + Job COMPLETED (단일 원자적 트랜잭션)
+        # [TX2] 단일 서비스 진입점으로 저장 (캐시/재생성/IntegrityError 흡수)
+        # generate_or_get_x_report() 가 job COMPLETED 처리까지 담당
         # ──────────────────────────────────────────────────────────
-        print("[5/5] Saving to database (atomic transaction)...")
-        result = asyncio.run(_save_report_async(
+        print("[5/5] Saving via service (unified entry point)...")
+        result = asyncio.run(_save_via_service(
             job_id=job_id,
             store_source_id=store_source_id,
             snapshot_version=snapshot_version,
             prompt_id=prompt_id,
-            content_text=report_text,
-            strategies=strategies,
-            analysis_log=analysis_result,
-            model_meta=model_meta,  # GPT 응답 메타데이터
+            report_payload={
+                "content_text": report_text,
+                "config_json": {"analysis_log": analysis_result},
+                "model_meta": model_meta,
+            },
+            strategies_payload=strategies,
+            force_regenerate=force_regenerate,
         ))
 
-        print(f"[SUCCESS] X-Report created: report_id={result.get('id')}")
+        cached_label = " [CACHE HIT]" if result.get("cached") else ""
+        print(f"[SUCCESS] X-Report saved: report_id={result.get('id')}{cached_label}")
         return result
 
     except ValueError as e:

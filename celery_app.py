@@ -10,7 +10,11 @@ celery_app = Celery(
     "backbone_worker",
     broker=settings.CELERY_BROKER_URL,
     backend=settings.CELERY_RESULT_BACKEND,
-    include=["tasks.x_report_task"]  # Task 모듈
+    include=[
+        "tasks.x_report_task",
+        "tasks.simulation_task",
+        "tasks.y_report_task",
+    ]
 )
 
 # Celery 설정
@@ -31,8 +35,8 @@ celery_app.conf.update(
 
     # 재시도 설정
     task_track_started=True,
-    task_time_limit=3600,  # 1시간 제한
-    task_soft_time_limit=3000,  # 50분 경고
+    task_time_limit=7200,  # 2시간 제한 (시뮬레이션은 오래 걸림)
+    task_soft_time_limit=6600,  # 110분 경고
 
     # 결과 만료
     result_expires=3600,  # 1시간 후 결과 삭제

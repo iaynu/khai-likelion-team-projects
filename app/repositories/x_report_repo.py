@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from typing import Optional
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -68,6 +69,44 @@ class XReportRepo:
             model_meta=model_meta,
         )
         self.session.add(report)
+        await self.session.flush()
+        await self.session.refresh(report)
+        return report
+
+    async def get_by_unique_key(
+        self, store_id: str, snapshot_id: int, prompt_id: str
+    ) -> Optional[XReport]:
+        """UniqueConstraint(store_id, snapshot_id, prompt_id) 기준으로 기존 행 조회.
+        상태 필터 없음 — SUCCEEDED/FAILED/RUNNING 모두 반환.
+        """
+        result = await self.session.execute(
+            select(XReport).where(
+                XReport.store_id == store_id,
+                XReport.snapshot_id == snapshot_id,
+                XReport.prompt_id == prompt_id,
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def update_report_fields(
+        self,
+        x_report_id: int,
+        content_text: str,
+        config_json: Optional[dict] = None,
+        model_meta: Optional[dict] = None,
+    ) -> XReport:
+        """기존 XReport 행을 SUCCEEDED 상태로 덮어쓴다.
+        strategies는 별도로 replace_all()을 통해 교체해야 한다.
+        """
+        report = await self.get_by_id(x_report_id)
+        if not report:
+            raise ValueError(f"XReport not found: id={x_report_id}")
+        report.content_text = content_text
+        report.config_json = config_json
+        report.model_meta = model_meta
+        report.status = "SUCCEEDED"
+        report.finished_at = datetime.now(timezone.utc)
+        report.error_message = None
         await self.session.flush()
         await self.session.refresh(report)
         return report

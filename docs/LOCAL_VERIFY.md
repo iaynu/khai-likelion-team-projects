@@ -4,6 +4,61 @@
 
 ---
 
+## PART 3 — 단일 서비스 진입점 통합 검증 (신규)
+
+`generate_or_get_x_report()` 통합 후 아래 2가지 시나리오를 반드시 확인한다.
+
+### 시나리오 1 — 동일 입력으로 2번 실행 시 FAILED 없이 캐시 히트
+
+```bash
+# 1회차
+curl -X POST http://localhost:8000/x-reports \
+  -H "Content-Type: application/json" \
+  -d '{"store_source_id": "test_store", "snapshot_version": "v1", "prompt_id": "default"}'
+# 기대: "status": "SUCCEEDED", "cached": false
+
+# 2회차 — 동일 입력
+curl -X POST http://localhost:8000/x-reports \
+  -H "Content-Type: application/json" \
+  -d '{"store_source_id": "test_store", "snapshot_version": "v1", "prompt_id": "default"}'
+# 기대: "status": "SUCCEEDED", "cached": true  (FAILED 이면 버그)
+```
+
+### 시나리오 2 — FAILED 행이 있을 때 force_regenerate=false 로도 재생성
+
+```bash
+# Step 1: 정상 생성 후 DB에서 status = 'FAILED' 로 직접 변경
+UPDATE x_reports SET status='FAILED'
+WHERE store_id = (SELECT id FROM stores WHERE source_id='fail_test');
+
+# Step 2: force_regenerate=false 로 재요청
+curl -X POST http://localhost:8000/x-reports \
+  -H "Content-Type: application/json" \
+  -d '{"store_source_id": "fail_test", "snapshot_version": "v1", "prompt_id": "default"}'
+# 기대: "status": "SUCCEEDED", "cached": false  (FAILED → SUCCEEDED 전환)
+```
+
+### 확인 포인트
+
+| 항목 | 기대값 |
+|------|--------|
+| 2회차 동일 요청 | `cached: true`, `status: SUCCEEDED` |
+| FAILED 행 재생성 | `cached: false`, `status: SUCCEEDED` |
+| IntegrityError 흡수 | jobs 테이블에 FAILED 행 없음 |
+| strategies 교체 | 재생성 후 x_report_id 기준 9개 신규 행 |
+
+### 레거시 스크립트 현황
+
+PART 3 이후 아래 스크립트는 `_save_via_service` import로 업데이트됨.
+내부 호출 로직은 `generate_or_get_x_report()` 기반으로 재작성이 필요하다.
+
+- `scripts/test_atomicity.py`
+- `scripts/verify_job_failure_propagation.py`
+
+---
+
+---
+
 ## 빠른 실행
 
 ### 1. Job 실패 전파 검증 (E2E)
@@ -329,6 +384,16 @@ set SQL_ECHO=1 && python scripts/verify_job_failure_propagation.py
    ```env
    DATABASE_URL=postgresql+asyncpg://user:password@localhost:5432/backbone
    ```
+
+---
+
+## 프론트 Contract 통합 스모크 (BACKEND-4)
+
+서버 실행 후 아래 한 줄로 `/stores`, `/x-reports/{id}/view`, `/y-reports/{id}/view` 계약을 한번에 확인한다.
+
+```bash
+python scripts/smoke_contract_all.py --base-url http://localhost:8000 --stores-limit 3 --x-id 1 --y-id 5
+```
 
 ---
 

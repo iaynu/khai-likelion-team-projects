@@ -39,6 +39,36 @@ _STRATEGY_DESCRIPTIONS = [
     ],
 ]
 
+_RADAR_SUBJECTS = ["맛", "서비스", "분위기", "가격", "위생"]
+
+_RADAR_REASONS = [
+    # 맛
+    ["리뷰에서 음식 맛 관련 긍정 언급이 다수 확인됩니다.", "메뉴 다양성에 대한 고객 요구가 반영되지 않았습니다.", "계절 한정 메뉴 도입으로 방문 유입을 높일 수 있습니다."],
+    # 서비스
+    ["직원 친절도에 대한 긍정 피드백이 있습니다.", "주문 대기 시간에 대한 불만이 일부 확인됩니다.", "응대 서비스 개선 여지가 있습니다."],
+    # 분위기
+    ["인테리어 관련 긍정 리뷰가 다수 존재합니다.", "소음 및 혼잡도에 대한 불만이 있습니다.", "공간 활용 개선으로 분위기 향상이 가능합니다."],
+    # 가격
+    ["가성비에 대한 긍정 평가가 많습니다.", "가격 대비 양에 대한 만족도가 높습니다.", "주변 경쟁 업체 대비 가격 경쟁력이 있습니다."],
+    # 위생
+    ["청결도에 대한 긍정 리뷰가 있습니다.", "위생 관련 부정 리뷰가 일부 존재합니다.", "정기적인 위생 점검으로 평점 향상이 필요합니다."],
+]
+
+_KEYWORD_POOL = [
+    {"text": "맛있어요", "sentiment": "positive"},
+    {"text": "친절해요", "sentiment": "positive"},
+    {"text": "가성비", "sentiment": "positive"},
+    {"text": "재방문의사", "sentiment": "positive"},
+    {"text": "분위기좋음", "sentiment": "positive"},
+    {"text": "양많음", "sentiment": "positive"},
+    {"text": "대기시간", "sentiment": "negative"},
+    {"text": "주차불편", "sentiment": "negative"},
+    {"text": "가격부담", "sentiment": "negative"},
+    {"text": "위치좋음", "sentiment": "positive"},
+    {"text": "청결함", "sentiment": "positive"},
+    {"text": "맛보통", "sentiment": "neutral"},
+]
+
 _IMPACT_DELTAS = [
     [
         {"arrival_rate_delta": 0.06, "satisfaction_delta": 0.04, "churn_rate_delta": -0.02},
@@ -72,17 +102,21 @@ def generate_x_report(merged_input: dict, prompt_id: str) -> Dict[str, Any]:
 
     start = time.time()
 
-    # Build strategies list (3 groups × 4 actions = 12)
+    # Build strategies list (3 groups × 4 actions = 12, shuffled per group for variety)
     strategies: list[dict] = []
     for g_idx in range(3):
-        for a_idx in range(4):
-            strategies.append({
+        group_items = [
+            {
                 "solution_group": g_idx + 1,
                 "action_idx": a_idx + 1,
                 "title": _STRATEGY_TITLES[g_idx][a_idx],
                 "description": _STRATEGY_DESCRIPTIONS[g_idx][a_idx],
                 "impact_mapping": _IMPACT_DELTAS[g_idx][a_idx],
-            })
+            }
+            for a_idx in range(4)
+        ]
+        random.shuffle(group_items)
+        strategies.extend(group_items)
 
     content_text = (
         f"[X-Report | prompt={prompt_id}]\n"
@@ -95,9 +129,23 @@ def generate_x_report(merged_input: dict, prompt_id: str) -> Dict[str, Any]:
 
     elapsed = time.time() - start
 
+    # Build radar_data (5 subjects, seeded scores 45–88)
+    radar_data = []
+    for i, subject in enumerate(_RADAR_SUBJECTS):
+        score = random.randint(45, 88)
+        reason = _RADAR_REASONS[i][random.randint(0, len(_RADAR_REASONS[i]) - 1)]
+        radar_data.append({"subject": subject, "A": score, "fullMark": 100, "reason": reason})
+
+    # Build keywords (6–8 from pool, seeded)
+    num_kw = random.randint(6, 8)
+    kw_indices = random.sample(range(len(_KEYWORD_POOL)), min(num_kw, len(_KEYWORD_POOL)))
+    keywords = [_KEYWORD_POOL[i] for i in sorted(kw_indices)]
+
     config_json = {
         "prompt_id": prompt_id,
         "strategies": strategies,
+        "radar_data": radar_data,
+        "keywords": keywords,
         "generated_at_seed": seed,
     }
 

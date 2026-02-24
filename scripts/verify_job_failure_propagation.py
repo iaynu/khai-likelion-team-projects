@@ -48,9 +48,12 @@ from app.models.store import Store
 import uuid
 
 # Task 내부 async 함수들
+# NOTE: _save_report_async 는 PART 3에서 _save_via_service 로 대체됨.
+# 이 스크립트는 레거시 실패 전파 검증용으로, generate_or_get_x_report() 기반으로
+# 재작성이 필요함 (docs/LOCAL_VERIFY.md 참조).
 from tasks.x_report_task import (
     _update_job_processing_async,
-    _save_report_async,
+    _save_via_service,
     _update_job_failed_async,
     extract_solutions,
     format_error_message,
