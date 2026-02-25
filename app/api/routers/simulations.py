@@ -1,10 +1,11 @@
 """
 Simulations Router
 
-POST /simulations                           — 시뮬레이션 Job 생성 + Celery enqueue
+POST /simulations                           — 시뮬레이션 Job 생성 + asyncio.create_task enqueue
 GET  /simulations/{sim_id}                 — 단건 결과 조회
 GET  /stores/{store_source_id}/simulations — 매장별 이력 목록
 """
+import asyncio
 from fastapi import APIRouter, HTTPException, Query
 
 from app.db.session import get_async_session
@@ -21,6 +22,16 @@ from app.schemas.simulation import (
 router = APIRouter(prefix="/simulations", tags=["simulations"])
 store_router = APIRouter(prefix="/stores", tags=["simulations"])
 
+# Strong references to background tasks to prevent GC before completion
+_background_tasks: set = set()
+
+def _fire_and_forget(coro) -> asyncio.Task:
+    """Schedule coro as a background task and keep a strong reference."""
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    return task
+
 
 @router.post(
     "",
@@ -28,26 +39,25 @@ store_router = APIRouter(prefix="/stores", tags=["simulations"])
     status_code=201,
     summary="시뮬레이션 실행 요청",
     responses={
-        201: {"description": "Job 생성 성공, Celery 태스크 enqueue 완료"},
+        201: {"description": "Job 생성 성공, asyncio.create_task enqueue 완료"},
         422: {"description": "요청 파라미터 검증 실패"},
     },
 )
 async def create_simulation(body: SimulationCreate):
     """
-    시뮬레이션 Job을 생성하고 Celery 태스크를 enqueue합니다.
+    시뮬레이션 Job을 생성하고 백그라운드 태스크를 실행합니다.
 
     **흐름:**
     1. `simulations` 테이블에 PENDING 레코드 생성
     2. `jobs` 테이블에 PENDING 레코드 생성
-    3. `tasks.run_simulation` Celery 태스크 enqueue
-    4. `job.celery_task_id` 저장
+    3. `run_simulation` asyncio.create_task 로 백그라운드 실행
 
     **응답:** `job_id`와 `sim_id`를 반환합니다.
     프론트엔드는 `GET /jobs/{job_id}`로 폴링하여 진행 상태를 확인하세요.
 
     **결과 조회:** 완료 후 `GET /simulations/{sim_id}`로 결과를 조회할 수 있습니다.
     """
-    from tasks.simulation_task import run_simulation as celery_run_simulation
+    from tasks.simulation_task import run_simulation
 
     input_json = body.model_dump()
 
@@ -68,8 +78,8 @@ async def create_simulation(body: SimulationCreate):
                 store_source_id=body.store_source_id,
             )
 
-    # Celery enqueue (트랜잭션 외부)
-    task = celery_run_simulation.delay(
+    # asyncio.create_task 로 백그라운드 실행 (트랜잭션 외부)
+    _fire_and_forget(run_simulation(
         job_id=job.id,
         sim_id=sim.id,
         store_source_id=body.store_source_id,
@@ -78,14 +88,7 @@ async def create_simulation(body: SimulationCreate):
         seed=body.seed,
         agent_count=body.agent_count,
         max_concurrent_llm_calls=body.max_concurrent_llm_calls,
-    )
-
-    # celery_task_id 저장
-    async with get_async_session() as session:
-        async with session.begin():
-            db_job = await JobRepo(session).get_by_id(job.id)
-            if db_job:
-                db_job.celery_task_id = task.id
+    ))
 
     return SimulationJobResponse(job_id=job.id, sim_id=sim.id)
 

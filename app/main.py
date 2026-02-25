@@ -1,3 +1,5 @@
+from datetime import datetime, timedelta
+
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -68,6 +70,48 @@ async def generic_exception_handler(request: Request, exc: Exception):
         status_code=500,
         content={"code": "INTERNAL_ERROR", "message": str(exc)},
     )
+
+
+@app.on_event("startup")
+async def reset_stuck_jobs():
+    """서버 재시작 시 PROCESSING 상태로 멈춘 Job을 FAILED로 정리.
+
+    조건: started_at < now-10분  (started_at NULL이면 created_at 기준)
+    asyncio.create_task 는 프로세스 종료 시 모두 소멸하므로,
+    재시작 후에도 PROCESSING으로 남은 잡은 완료 불가능한 좀비 상태다.
+    """
+    from sqlalchemy import update as sa_update, or_, and_
+    from app.db.session import get_async_session
+    from app.models.job import Job, JobStatus
+
+    cutoff = datetime.utcnow() - timedelta(minutes=10)
+    try:
+        async with get_async_session() as session:
+            async with session.begin():
+                result = await session.execute(
+                    sa_update(Job)
+                    .where(
+                        Job.status == JobStatus.PROCESSING,
+                        or_(
+                            Job.started_at < cutoff,
+                            and_(Job.started_at.is_(None), Job.created_at < cutoff),
+                        ),
+                    )
+                    .values(
+                        status=JobStatus.FAILED,
+                        error_message="[SERVER_RESTART] 서버 재시작으로 인해 중단된 작업입니다.",
+                        completed_at=datetime.utcnow(),
+                    )
+                    .execution_options(synchronize_session=False)
+                )
+        count = result.rowcount
+        if count > 0:
+            print(f"[Startup] stuck job {count}개 → FAILED 처리 완료")
+        else:
+            print("[Startup] stuck job 없음")
+    except Exception as e:
+        # DB 초기화 전 호출되는 경우 등 — 서버 기동을 막지 않음
+        print(f"[Startup] reset_stuck_jobs 실패 (무시): {e}")
 
 
 @app.get("/health")

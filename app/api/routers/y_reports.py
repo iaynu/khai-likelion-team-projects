@@ -1,10 +1,11 @@
 """
 Y-Reports Router
 
-POST /y-reports                           — Y-Report Job 생성 + Celery enqueue
+POST /y-reports                           — Y-Report Job 생성 + asyncio.create_task enqueue
 GET  /y-reports/{y_report_id}             — 단건 결과 조회
 GET  /stores/{store_source_id}/y-reports  — 매장별 이력 목록
 """
+import asyncio
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -25,6 +26,15 @@ from app.services.y_report_view_service import build_y_report_view
 router = APIRouter(prefix="/y-reports", tags=["y-reports"])
 store_router = APIRouter(prefix="/stores", tags=["y-reports"])
 
+# Strong references to background tasks to prevent GC before completion
+_background_tasks: set = set()
+
+def _fire_and_forget(coro):
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    return task
+
 
 @router.post(
     "",
@@ -32,7 +42,7 @@ store_router = APIRouter(prefix="/stores", tags=["y-reports"])
     status_code=201,
     summary="Y-Report 생성 요청",
     responses={
-        201: {"description": "Job 생성 성공, Celery 태스크 enqueue 완료"},
+        201: {"description": "Job 생성 성공, asyncio.create_task enqueue 완료"},
         404: {"description": "simulation_id에 해당하는 Simulation 없음"},
         422: {"description": "Simulation이 COMPLETED 상태가 아니거나 파라미터 검증 실패"},
     },
@@ -48,15 +58,14 @@ async def create_y_report(body: YReportCreate):
     1. Simulation 존재 여부 및 `COMPLETED` 상태 확인
     2. `y_reports` 테이블에 PENDING 레코드 생성
     3. `jobs` 테이블에 PENDING 레코드 생성
-    4. `tasks.generate_y_report` Celery 태스크 enqueue
-    5. `job.celery_task_id` 저장
+    4. `generate_y_report` asyncio.create_task 로 백그라운드 실행
 
     **응답:** `job_id`와 `y_report_id`를 반환합니다.
     프론트엔드는 `GET /jobs/{job_id}`로 폴링하여 진행 상태를 확인하세요.
 
     **결과 조회:** 완료 후 `GET /y-reports/{y_report_id}`로 결과를 조회할 수 있습니다.
     """
-    from tasks.y_report_task import generate_y_report as celery_generate_y_report
+    from tasks.y_report_task import generate_y_report
 
     # Simulation 상태 확인
     async with get_async_session() as session:
@@ -87,21 +96,14 @@ async def create_y_report(body: YReportCreate):
                 store_source_id=store_source_id,
             )
 
-    # Celery enqueue (트랜잭션 외부)
-    task = celery_generate_y_report.delay(
+    # asyncio.create_task 로 백그라운드 실행 (트랜잭션 외부)
+    _fire_and_forget(generate_y_report(
         job_id=job.id,
         y_report_id=y_report.id,
         simulation_id=body.simulation_id,
         x_report_id=body.x_report_id,
         options=body.options or {},
-    )
-
-    # celery_task_id 저장
-    async with get_async_session() as session:
-        async with session.begin():
-            db_job = await JobRepo(session).get_by_id(job.id)
-            if db_job:
-                db_job.celery_task_id = task.id
+    ))
 
     return YReportJobResponse(job_id=job.id, y_report_id=y_report.id)
 

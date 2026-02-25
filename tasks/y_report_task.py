@@ -1,8 +1,9 @@
 """
-YReport Celery Task
+YReport Background Task
 
 3-TX 패턴: TX1(PROCESSING) → TX2(COMPLETED) → TX3(FAILED)
 
+Celery 제거 — FastAPI asyncio.create_task() 로 직접 실행.
 YReportService를 통해 엔진을 호출하고, 각 TX에서 DB 상태를 원자적으로 전환한다.
 
 에러 코드:
@@ -17,9 +18,6 @@ YReportService를 통해 엔진을 호출하고, 각 TX에서 DB 상태를 원�
 import asyncio
 from typing import Any, Dict, Optional
 
-from celery import Task
-
-from celery_app import celery_app
 from app.db.session import get_async_session
 from app.repositories.job_repo import JobRepo
 from app.repositories.y_report_repo import YReportRepo
@@ -88,24 +86,10 @@ async def _tx3_failed(job_id: int, y_report_id: int, error_message: str) -> None
 
 
 # ──────────────────────────────────────────────────────────────
-# Celery Task
+# Background Task (Celery 없음 — asyncio.create_task 로 호출)
 # ──────────────────────────────────────────────────────────────
 
-class YReportTask(Task):
-    """YReport Task 기본 클래스"""
-
-    def on_failure(self, exc, task_id, args, kwargs, einfo):
-        print(f"[YReportTask ERROR] task_id={task_id}: {exc}")
-
-
-@celery_app.task(
-    bind=True,
-    base=YReportTask,
-    name="tasks.generate_y_report",
-    max_retries=0,
-)
-def generate_y_report(
-    self,
+async def generate_y_report(
     job_id: int,
     y_report_id: int,
     simulation_id: int,
@@ -113,17 +97,9 @@ def generate_y_report(
     options: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
-    Y-Report 생성 Celery Task.
+    Y-Report 생성 Background Task.
 
-    Args:
-        job_id:        Job ID (jobs 테이블)
-        y_report_id:   YReport ID (y_reports 테이블)
-        simulation_id: 연결된 Simulation ID (before/after 경로 조회용)
-        x_report_id:   연결된 X-Report ID (선택, meta 컨텍스트용)
-        options:       YReportAdapter 추가 옵션 (before_dir 오버라이드 등)
-
-    Returns:
-        {"y_report_id": ..., "status": "completed"}
+    asyncio.create_task(generate_y_report(...)) 로 호출한다.
     """
     print(
         f"[YReportTask] 시작: y_report_id={y_report_id}, "
@@ -133,22 +109,17 @@ def generate_y_report(
 
     try:
         # ── TX1: Job → PROCESSING ──────────────────────────────
-        asyncio.run(_tx1_processing(job_id))
+        await _tx1_processing(job_id)
 
         # ── Y-Report 생성 (트랜잭션 외부) ─────────────────────
-        # YReportService가 DB 로드 · 에러 분류 · meta 기록을 담당한다.
         from app.services.y_report_service import YReportService
 
-        result = asyncio.run(
-            YReportService().run(
-                simulation_id=simulation_id,
-                x_report_id=x_report_id,
-                options=options or {},
-            )
+        result = await YReportService().run(
+            simulation_id=simulation_id,
+            x_report_id=x_report_id,
+            options=options or {},
         )
 
-        # output_json: 수치 지표 + 어댑터/서비스 meta 함께 저장
-        # markdown은 별도 컬럼에 저장 (YReport.markdown)
         output_json: Dict[str, Any] = {
             "structured": result["output"].get("structured", {}),
             "adapter_meta": result["output"].get("meta", {}),
@@ -157,27 +128,24 @@ def generate_y_report(
         markdown: str = result["output"].get("markdown", "")
 
         # ── TX2: YReport + Job → COMPLETED ─────────────────────
-        asyncio.run(_tx2_completed(job_id, y_report_id, output_json, markdown))
+        await _tx2_completed(job_id, y_report_id, output_json, markdown)
 
         timing_ms = result["meta"].get("timing_ms", "?")
         print(f"[YReportTask] 완료: y_report_id={y_report_id}, timing_ms={timing_ms}ms")
         return {"y_report_id": y_report_id, "status": "completed"}
 
     except RuntimeError as e:
-        # YReportService가 이미 [ERROR_CODE] 형식으로 래핑한 에러.
-        # str(e) 그대로 사용하고 Context만 덧붙인다 (중복 포맷 방지).
         error_msg = f"{str(e)[:550]} | Context: {context}"
-        asyncio.run(_tx3_failed(job_id, y_report_id, error_msg))
+        await _tx3_failed(job_id, y_report_id, error_msg)
         print(f"[YReportTask] 실패(RuntimeError): {error_msg[:200]}")
         raise
 
     except Exception as e:
-        # 예상치 못한 예외: UNKNOWN_ERROR 코드로 포맷
         error_msg = _format_error(
             "UNKNOWN_ERROR",
             f"{type(e).__name__}: {str(e)}",
             context,
         )
-        asyncio.run(_tx3_failed(job_id, y_report_id, error_msg))
+        await _tx3_failed(job_id, y_report_id, error_msg)
         print(f"[YReportTask] 실패(Exception): {error_msg[:200]}")
         raise

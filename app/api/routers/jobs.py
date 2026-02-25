@@ -1,6 +1,7 @@
 """
 Jobs API - 비동기 작업 관리
 """
+import asyncio
 import logging
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Header
@@ -16,6 +17,15 @@ from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/jobs", tags=["jobs"])
+
+# Strong references to background tasks to prevent GC before completion
+_background_tasks: set = set()
+
+def _fire_and_forget(coro):
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    return task
 
 
 class JobStatusUpdate(BaseModel):
@@ -63,23 +73,18 @@ async def create_job(body: JobCreateRequest, db: AsyncSession = Depends(get_db))
     await db.commit()
     await db.refresh(job)
 
-    # Celery Task 등록
+    # asyncio.create_task 로 백그라운드 실행
     if body.job_type == "x_report":
-        celery_task = generate_x_report.delay(
+        _fire_and_forget(generate_x_report(
             job_id=job.id,
             store_id=store.id,
             store_source_id=body.store_source_id,
             store_name=store.store_name,
             snapshot_version=body.snapshot_version,
             prompt_id=body.prompt_id,
-        )
+        ))
 
-        # Job에 celery_task_id 업데이트
-        job.celery_task_id = celery_task.id
-        await db.commit()
-        await db.refresh(job)
-
-    logger.info(f"Job created: id={job.id}, type={body.job_type}, celery_task_id={job.celery_task_id}")
+    logger.info(f"Job created: id={job.id}, type={body.job_type}")
     return JobOut.model_validate(job, from_attributes=True)
 
 

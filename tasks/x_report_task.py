@@ -1,6 +1,9 @@
 """
-X-Report 생성 Celery Task
+X-Report 생성 Background Task
 GPT 기반 X-Report 생성 후 DB 직접 저장
+
+Celery 제거 — FastAPI asyncio.create_task() 로 직접 실행.
+동기 GPT/HTTP 호출은 asyncio.to_thread() 로 래핑한다.
 """
 import os
 import json
@@ -8,11 +11,9 @@ import asyncio
 import requests
 import traceback
 from typing import Dict, Any, List, Optional
-from celery import Task
 from openai import OpenAI
 import openai  # For exceptions
 
-from celery_app import celery_app
 from app.core.config import settings
 
 # DB 직접 접근을 위한 imports
@@ -192,33 +193,7 @@ async def _update_job_failed_async(job_id: int, error_message: str) -> None:
         # Don't raise - 실패 기록 자체가 실패해도 원래 예외를 우선
 
 
-class XReportGenerationTask(Task):
-    """X-Report 생성 Task (상태 추적)"""
-
-    def on_failure(self, exc, task_id, args, kwargs, einfo):
-        """Task 실패 시 Job 상태 업데이트"""
-        job_id = kwargs.get("job_id")
-        if job_id:
-            # Job 상태를 FAILED로 업데이트하는 로직 추가 가능
-            print(f"[ERROR] Task failed for job_id={job_id}: {exc}")
-
-
-@celery_app.task(
-    bind=True,
-    base=XReportGenerationTask,
-    name="tasks.generate_x_report",
-    autoretry_for=(
-        openai.APIError,           # OpenAI API 오류 재시도
-        requests.Timeout,           # Timeout 오류 재시도
-        requests.HTTPError,         # HTTP 5xx 오류 재시도
-    ),
-    max_retries=3,                  # 최대 3회 재시도
-    retry_backoff=True,             # 지수 백오프 (1분 → 2분 → 4분)
-    retry_backoff_max=600,          # 최대 10분
-    default_retry_delay=60,         # 기본 재시도 간격 60초
-)
-def generate_x_report(
-    self,
+async def generate_x_report(
     job_id: int,
     store_id: str,
     store_source_id: str,
@@ -228,7 +203,10 @@ def generate_x_report(
     force_regenerate: bool = False,
 ) -> Dict[str, Any]:
     """
-    X-Report 생성 Task
+    X-Report 생성 Background Task.
+
+    asyncio.create_task(generate_x_report(...)) 로 호출한다.
+    동기 GPT/HTTP 호출은 asyncio.to_thread() 로 스레드 풀에서 실행한다.
 
     Args:
         job_id: Job ID
@@ -241,18 +219,6 @@ def generate_x_report(
 
     Returns:
         생성된 X-Report 정보 {id, store_id, snapshot_id, prompt_id, status, cached}
-
-    Raises:
-        ValueError: 전략 파싱 실패 (재시도 안 함)
-        openai.APIError: OpenAI API 오류 (재시도 후 실패)
-        requests.Timeout: 백엔드 API Timeout (재시도 후 실패)
-        requests.HTTPError: 백엔드 API 오류 (재시도 후 실패)
-
-    Note:
-        - ValueError는 autoretry_for에 포함되지 않아 즉시 실패 처리됩니다.
-        - 재시도 가능 예외도 max_retries 초과 시 최종 실패 처리됩니다.
-        - IntegrityError(중복 실행)는 서비스 레이어가 캐시 히트로 흡수 — FAILED 없음.
-        - 모든 실패는 Job.status를 FAILED로 업데이트하고 error_message를 기록합니다.
     """
     print(f"[START] Generating X-Report for store={store_name}, job_id={job_id}")
 
@@ -263,7 +229,7 @@ def generate_x_report(
         # ──────────────────────────────────────────────────────────
         # [TX1] Job 상태 → PROCESSING (독립 트랜잭션)
         # ──────────────────────────────────────────────────────────
-        asyncio.run(_update_job_processing_async(job_id))
+        await _update_job_processing_async(job_id)
 
         # OpenAI API Key 확인
         api_key = settings.OPENAI_API_KEY
@@ -274,19 +240,22 @@ def generate_x_report(
 
         # ──────────────────────────────────────────────────────────
         # [외부 API 호출] GPT 분석 및 Report 생성 (트랜잭션 외부)
+        # 동기 함수는 asyncio.to_thread() 로 스레드 풀에서 실행
         # ──────────────────────────────────────────────────────────
 
         # Step 1: 매장 데이터 조회 (백엔드 API - HTTP)
         print("[1/4] Fetching store data from backend...")
-        store_data = fetch_store_data(store_id, snapshot_version)
+        store_data = await asyncio.to_thread(fetch_store_data, store_id, snapshot_version)
 
         # Step 2: GPT 분석 (Temperature 0.1)
         print("[2/4] GPT analysis...")
-        analysis_result = call_gpt_analysis(client, store_data, store_name)
+        analysis_result = await asyncio.to_thread(call_gpt_analysis, client, store_data, store_name)
 
         # Step 3: X-Report 생성 (Temperature 0.7, JSON-only)
         print("[3/4] GPT X-Report generation (JSON mode)...")
-        report_text, model_meta = call_gpt_report(client, store_data, store_name, analysis_result)
+        report_text, model_meta = await asyncio.to_thread(
+            call_gpt_report, client, store_data, store_name, analysis_result
+        )
         print(f"[INFO] GPT response: model={model_meta.get('model')}, tokens={model_meta.get('total_tokens', 'N/A')}")
 
         # Step 4: 9개 전략 추출 (JSON-first → 텍스트 fallback)
@@ -298,7 +267,7 @@ def generate_x_report(
         # generate_or_get_x_report() 가 job COMPLETED 처리까지 담당
         # ──────────────────────────────────────────────────────────
         print("[5/5] Saving via service (unified entry point)...")
-        result = asyncio.run(_save_via_service(
+        result = await _save_via_service(
             job_id=job_id,
             store_source_id=store_source_id,
             snapshot_version=snapshot_version,
@@ -310,7 +279,7 @@ def generate_x_report(
             },
             strategies_payload=strategies,
             force_regenerate=force_regenerate,
-        ))
+        )
 
         cached_label = " [CACHE HIT]" if result.get("cached") else ""
         print(f"[SUCCESS] X-Report saved: report_id={result.get('id')}{cached_label}")
@@ -318,74 +287,69 @@ def generate_x_report(
 
     except ValueError as e:
         # ──────────────────────────────────────────────────────────
-        # [A] ValueError: 전략 파싱 오류 - 재시도 안 함
-        # → TX2 rollback (자동) + TX3 실행 (Job FAILED 기록)
+        # [A] ValueError: 전략 파싱 오류
         # ──────────────────────────────────────────────────────────
         error_msg = format_error_message(
             error_code="STRATEGY_PARSE_COUNT_MISMATCH",
             message=str(e),
             context=report_text[:500] if report_text else "No report text generated"
         )
-        asyncio.run(_update_job_failed_async(job_id, error_msg))
+        await _update_job_failed_async(job_id, error_msg)
         print(f"[FAILED] ValueError: {e}")
-        raise  # Celery에 실패 전파 (재시도 안 함)
+        raise
 
     except requests.Timeout as e:
         # ──────────────────────────────────────────────────────────
-        # [B-1] Timeout: 재시도 대상, 최종 실패 시 처리
-        # → TX2 rollback (자동) + TX3 실행 (Job FAILED 기록)
+        # [B-1] Timeout
         # ──────────────────────────────────────────────────────────
         error_msg = format_error_message(
             error_code="BACKEND_TIMEOUT",
             message=f"Backend API timeout: {str(e)}",
             context=f"URL: {e.request.url if hasattr(e, 'request') else 'N/A'}"
         )
-        asyncio.run(_update_job_failed_async(job_id, error_msg))
-        print(f"[FAILED] Timeout after retries: {e}")
-        raise  # Celery에 실패 전파 (재시도 또는 최종 실패)
+        await _update_job_failed_async(job_id, error_msg)
+        print(f"[FAILED] Timeout: {e}")
+        raise
 
     except requests.HTTPError as e:
         # ──────────────────────────────────────────────────────────
-        # [B-2] HTTPError: 재시도 대상, 최종 실패 시 처리
-        # → TX2 rollback (자동) + TX3 실행 (Job FAILED 기록)
+        # [B-2] HTTPError
         # ──────────────────────────────────────────────────────────
         error_msg = format_error_message(
             error_code="BACKEND_API_ERROR",
             message=f"Backend API error: {e.response.status_code if e.response else 'N/A'} - {str(e)}",
             context=f"URL: {e.request.url if hasattr(e, 'request') else 'N/A'}"
         )
-        asyncio.run(_update_job_failed_async(job_id, error_msg))
-        print(f"[FAILED] HTTPError after retries: {e}")
-        raise  # Celery에 실패 전파 (재시도 또는 최종 실패)
+        await _update_job_failed_async(job_id, error_msg)
+        print(f"[FAILED] HTTPError: {e}")
+        raise
 
     except openai.APIError as e:
         # ──────────────────────────────────────────────────────────
-        # [B-3] OpenAI APIError: 재시도 대상, 최종 실패 시 처리
-        # → TX2 rollback (자동) + TX3 실행 (Job FAILED 기록)
+        # [B-3] OpenAI APIError
         # ──────────────────────────────────────────────────────────
         error_msg = format_error_message(
             error_code="LLM_API_ERROR",
             message=f"OpenAI API error: {str(e)}",
             context=f"Type: {type(e).__name__}"
         )
-        asyncio.run(_update_job_failed_async(job_id, error_msg))
-        print(f"[FAILED] OpenAI APIError after retries: {e}")
-        raise  # Celery에 실패 전파 (재시도 또는 최종 실패)
+        await _update_job_failed_async(job_id, error_msg)
+        print(f"[FAILED] OpenAI APIError: {e}")
+        raise
 
     except Exception as e:
         # ──────────────────────────────────────────────────────────
-        # [C] 기타 모든 예외: 재시도 안 함
-        # → TX2 rollback (자동) + TX3 실행 (Job FAILED 기록)
+        # [C] 기타 모든 예외
         # ──────────────────────────────────────────────────────────
         error_msg = format_error_message(
             error_code="UNKNOWN_ERROR",
             message=f"Unexpected error: {type(e).__name__} - {str(e)}",
             context=traceback.format_exc()[:500]
         )
-        asyncio.run(_update_job_failed_async(job_id, error_msg))
+        await _update_job_failed_async(job_id, error_msg)
         print(f"[FAILED] Unexpected error: {e}")
         print(traceback.format_exc())
-        raise  # Celery에 실패 전파 (재시도 안 함)
+        raise
 
 
 def fetch_store_data(store_id: str, snapshot_version: str) -> Dict[str, Any]:
@@ -493,7 +457,7 @@ def call_gpt_report(client: OpenAI, store_data: Dict, store_name: str, analysis_
     model_meta = {
         "model": response.model,
         "request_id": response.id,
-        "worker": "celery",
+        "worker": "asyncio",
     }
 
     # usage 정보가 있으면 추가

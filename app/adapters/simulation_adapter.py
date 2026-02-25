@@ -213,7 +213,7 @@ async def run_full_pipeline(
     output_base = engine_path / "data" / "output"
     before_dir = output_base / f"{store_source_id}_before"
     after_dir = output_base / f"{store_source_id}_after"
-    store_json_dir = engine_path / "data" / "raw" / "split_by_store_id_ver5"
+    store_json_dir = engine_path / "data" / "raw" / "split_by_store_id_ver5_"
 
     # Simulation 1: Before
     print(f"[SimAdapter] 시뮬레이션 1/2 시작 (before) - {store_source_id}")
