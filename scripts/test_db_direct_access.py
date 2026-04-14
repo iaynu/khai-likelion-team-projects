@@ -60,7 +60,7 @@ async def test_bulk_create():
                 prompt_id="test_prompt_v1",
                 content_text="GPT generated report text here...",
                 config_json={"version": "1.0"},
-                model_meta={"model": "gpt-5.2", "tokens": 5000},
+                model_meta={"model": "gpt-5.4", "tokens": 5000},
             )
             print(f"XReport created: id={xreport.id}")
 
@@ -109,7 +109,7 @@ async def test_create_completed():
                 snapshot_id=2,
                 prompt_id="test_prompt_v2",
                 content_text="Full GPT report content here...",
-                config_json={"version": "2.0", "model": "gpt-5.2"},
+                config_json={"version": "2.0", "model": "gpt-5.4"},
                 model_meta={"tokens": 8000, "cost": 0.05},
             )
 
