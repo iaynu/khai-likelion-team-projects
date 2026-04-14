@@ -8,8 +8,8 @@ from pathlib import Path
 
 def ingest_data():
     # JSON 파일 읽기
-    market_file = Path("최종_상권X매출X리뷰.json")
-    population_file = Path("최종_인구_DB.json")
+    market_file = Path("data/raw/최종_상권X매출X리뷰.json")
+    population_file = Path("data/raw/최종_인구_DB.json")
 
     print("[INFO] JSON files loading...")
     with open(market_file, "r", encoding="utf-8") as f:
