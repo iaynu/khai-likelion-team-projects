@@ -32,7 +32,7 @@ def ingest_data():
     url = "http://127.0.0.1:8000/admin/ingest"
 
     try:
-        response = requests.post(url, json=payload, timeout=60)
+        response = requests.post(url, json=payload, timeout=600)
         response.raise_for_status()
 
         result = response.json()
