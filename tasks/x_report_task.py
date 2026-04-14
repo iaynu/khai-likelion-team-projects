@@ -394,7 +394,7 @@ def call_gpt_analysis(client: OpenAI, store_data: Dict, store_name: str) -> str:
 반드시 '### 최종 분석 보고' 헤더 다음 상세 내용을 작성하세요."""
 
     response = client.chat.completions.create(
-        model="gpt-5.2",
+        model="gpt-5.4",
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
@@ -412,7 +412,7 @@ def call_gpt_report(client: OpenAI, store_data: Dict, store_name: str, analysis_
     Returns:
         Tuple[str, Dict[str, Any]]: (JSON 문자열, model_meta)
         - JSON 문자열: {"categories": [{"title": "...", "solutions": ["...", "...", "..."]}, ...]}
-        - model_meta: {"model": "gpt-5.2", "request_id": "...", "prompt_tokens": 123, "completion_tokens": 456, "total_tokens": 579}
+        - model_meta: {"model": "gpt-5.4", "request_id": "...", "prompt_tokens": 123, "completion_tokens": 456, "total_tokens": 579}
     """
 
     system_prompt = "당신은 외식공인의 성공을 돕는 데이터 기반 비즈니스 전략가 'X-report'입니다."
@@ -444,7 +444,7 @@ def call_gpt_report(client: OpenAI, store_data: Dict, store_name: str, analysis_
 - JSON 외 다른 텍스트를 출력하지 마세요."""
 
     response = client.chat.completions.create(
-        model="gpt-5.2",
+        model="gpt-5.4",
         messages=[
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
@@ -1048,7 +1048,7 @@ def save_to_backend(
         "prompt_id": prompt_id,
         "content_text": content_text,
         "config_json": {"analysis_log": analysis_log},
-        "model_meta": {"model": "gpt-5.2", "worker": "celery"},
+        "model_meta": {"model": "gpt-5.4", "worker": "celery"},
         "strategies": strategies,
     }
 

@@ -1,5 +1,5 @@
 """
-GPT LLM Provider — real OpenAI gpt-5.2 for X-Report generation.
+GPT LLM Provider — real OpenAI gpt-5.4 for X-Report generation.
 
 파이프라인:
   1) _call_analysis()  → 매장 데이터 심층 분석 (temperature=0.1)
@@ -23,7 +23,7 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-_MODEL = "gpt-5.2"
+_MODEL = "gpt-5.4"
 _API_TIMEOUT = 90.0  # OpenAI 클라이언트 타임아웃 (초)
 
 

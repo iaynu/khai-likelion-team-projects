@@ -258,7 +258,7 @@ async def test_scenario_b_db_failure_simulation(job_id: int):
                     prompt_id="test-prompt-failure",
                     content_text="This should be rolled back",
                     config_json={"test": "rollback"},
-                    model_meta={"model": "gpt-5.2"},
+                    model_meta={"model": "gpt-5.4"},
                 )
                 print(f"  XReport created (will rollback): id={xreport.id}")
 
