@@ -39,7 +39,7 @@ class PathSettings(BaseSettings):
 class LLMSettings(BaseSettings):
     """LLM API configuration."""
 
-    provider: str = Field(default="openai", description="LLM provider: openai | gemini")
+    provider: str = Field(default="gemini", description="LLM provider: openai | gemini")
     model_name: str = Field(default="gemini-2.5-flash-lite", description="Model name")
     api_key: str = Field(default="", description="API key")
     temperature: float = Field(default=0.7)

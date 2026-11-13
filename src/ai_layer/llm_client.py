@@ -35,9 +35,32 @@ class LLMClient:
         messages.append({"role": "user", "content": prompt})
         return messages
 
+    ## 요청 헤더/바디 조립 (async/sync 공통). response_format은 OpenAI-compatible structured output 스키마.
+    def _build_request(
+        self,
+        prompt: str,
+        system_prompt: Optional[str],
+        model: Optional[str],
+        response_format: Optional[dict],
+    ) -> dict:
+        body = {
+            "model": model or self.model,
+            "messages": self._build_messages(prompt, system_prompt),
+            "temperature": self.temperature,
+            "max_tokens": self.max_tokens,
+        }
+        if response_format:
+            body["response_format"] = response_format
+        return {
+            "headers": {
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            },
+            "json": body,
+        }
+
     ## 시뮬레이션에서 여러 에이전트를 asyncio.gather()로 동시 실행할 때 사용.
     ## model 인자로 호출별 모델 오버라이드 가능 (None이면 self.model 사용).
-    ## response_format 인자로 OpenAI-compatible structured output 스키마 전달 가능.
     async def generate(
         self,
         prompt: str,
@@ -45,47 +68,24 @@ class LLMClient:
         model: Optional[str] = None,
         response_format: Optional[dict] = None,
     ) -> str:
+        request = self._build_request(prompt, system_prompt, model, response_format)
         async with httpx.AsyncClient(timeout=60.0) as client:
-            body = {
-                "model": model or self.model,
-                "messages": self._build_messages(prompt, system_prompt),
-                "temperature": self.temperature,
-                "max_tokens": self.max_tokens,
-            }
-            if response_format:
-                body["response_format"] = response_format
-            response = await client.post(
-                self.base_url,
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json",
-                },
-                json=body,
-            )
+            response = await client.post(self.base_url, **request)
             response.raise_for_status()
-            data = response.json()
-            return data["choices"][0]["message"]["content"]
+            return response.json()["choices"][0]["message"]["content"]
 
     def generate_sync(
-        self, prompt: str, system_prompt: Optional[str] = None, model: Optional[str] = None
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        model: Optional[str] = None,
+        response_format: Optional[dict] = None,
     ) -> str:
+        request = self._build_request(prompt, system_prompt, model, response_format)
         with httpx.Client(timeout=60.0) as client:
-            response = client.post(
-                self.base_url,
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": model or self.model,
-                    "messages": self._build_messages(prompt, system_prompt),
-                    "temperature": self.temperature,
-                    "max_tokens": self.max_tokens,
-                },
-            )
+            response = client.post(self.base_url, **request)
             response.raise_for_status()
-            data = response.json()
-            return data["choices"][0]["message"]["content"]
+            return response.json()["choices"][0]["message"]["content"]
 
 ## LLM 호출 객체 생성
 def create_llm_client() -> LLMClient:
