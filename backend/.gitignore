@@ -56,3 +56,6 @@ Thumbs.db
 # Data
 data/raw/
 data/processed/
+
+# LLM response cache
+cache/
